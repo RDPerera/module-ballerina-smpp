@@ -608,9 +608,11 @@ public final class NativeClient {
      * {@code null}, the session is bound and every other extern in this class is ready to
      * use.
      */
-    public static Object init(BObject client, BMap<BString, Object> config, Object tls) {
-        String systemId = str(config, "systemId", "");
-        String password = str(config, "password", "");
+    public static Object init(BObject client, BString hostVal, BString systemIdVal, BString passwordVal,
+            BMap<BString, Object> config, Object tls) {
+        String host = hostVal.getValue();
+        String systemId = systemIdVal.getValue();
+        String password = passwordVal.getValue();
         String systemType = str(config, "systemType", "");
         try {
             validateCredentials(systemId, password, systemType);
@@ -667,7 +669,6 @@ public final class NativeClient {
         // independently by its own watchdog regardless of this value.
         session.setTransactionTimer(transactionTimeoutMillis);
 
-        String host = str(config, "host", "");
         int port = (int) ((Long) config.getIntValue(StringUtils.fromString("port"))).longValue();
         BindType bindType = toBindType(bindTypeStr);
         try {

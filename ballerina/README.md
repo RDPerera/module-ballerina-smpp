@@ -23,13 +23,8 @@ configurable string systemId = ?;
 configurable string password = ?;
 
 public function main() returns error? {
-    smpp:Client smppClient = check new ({
-        host: "localhost",
-        port: 2775,
-        systemId,
-        password,
-        bindType: smpp:TRANSMITTER
-    });
+    smpp:Client smppClient = check new ("localhost", systemId, password, port = 2775,
+            bindType = smpp:TRANSMITTER);
 
     smpp:SubmitResult|smpp:Error result = smppClient->submit({
         destinationAddress: "94771234567",
@@ -77,13 +72,8 @@ import ballerina/io;
 configurable string systemId = ?;
 configurable string password = ?;
 
-listener smpp:Listener smsListener = check new ({
-    host: "localhost",
-    port: 2775,
-    systemId,
-    password,
-    bindType: smpp:RECEIVER
-});
+listener smpp:Listener smsListener = check new ("localhost", systemId, password, port = 2775,
+        bindType = smpp:RECEIVER);
 
 service on smsListener {
     remote function onDeliverSm(smpp:Sms sms) returns error? {
@@ -120,15 +110,10 @@ When `sms.deliveryReceipt` is `true`, jsmpp's Appendix-B receipt parser fills `s
 Both the `Client` and the `Listener` accept `secureSocket: SecureSocket|InsecureSocket` to wrap the SMPP session in TLS — SMPP binds otherwise send `systemId`/`password` in cleartext.
 
 ```ballerina
-smpp:Client smppClient = check new ({
-    host: "smsc.example.com",
-    port: 3550,
-    systemId,
-    password,
-    secureSocket: {
-        cert: {path: "./truststore.p12", password: trustStorePass}
-    }
-});
+smpp:Client smppClient = check new ("smsc.example.com", systemId, password, port = 3550,
+        secureSocket = {
+            cert: {path: "./truststore.p12", password: trustStorePass}
+        });
 ```
 
 `cert` (required) verifies the server against a PKCS12/JKS truststore or a PEM CA certificate path; hostname verification is on by default; only TLS 1.2/1.3 are negotiated; set `key` (a `crypto:KeyStore`) for mutual TLS. `InsecureSocket` (development/testing only, disables server-certificate verification) is documented on the type itself, along with a loud warning logged whenever it is in effect.

@@ -23,14 +23,8 @@ configurable string systemId = ?;
 configurable string password = ?;
 configurable string shortCode = ?;
 
-listener smpp:Listener smsListener = check new ({
-    host,
-    port,
-    systemId,
-    password,
-    bindType: smpp:TRANSCEIVER,
-    responseMode: smpp:ASYNC
-});
+listener smpp:Listener smsListener = check new (host, systemId, password, port = port,
+        bindType = smpp:TRANSCEIVER, responseMode = smpp:ASYNC);
 
 // Stand-in for a real billing/OCS lookup.
 isolated function lookupBalance(string subscriber) returns decimal {

@@ -31,8 +31,8 @@ isolated service class AliasDefaultsAndOnError {
 }
 
 public function main() returns error? {
-    smpp:Listener lisA = check new ({host: "localhost", systemId: "x", password: "y"});
+    smpp:Listener lisA = check new ("localhost", "x", "y");
     check lisA.attach(new CallerFirst());
-    smpp:Listener lisB = check new ({host: "localhost", port: 2776, systemId: "x", password: "y"});
+    smpp:Listener lisB = check new ("localhost", "x", "y", port = 2776);
     check lisB.attach(new AliasDefaultsAndOnError());
 }

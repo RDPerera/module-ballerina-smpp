@@ -76,16 +76,11 @@ function testClientTlsBindAndSubmitRoundTrip() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_HAPPY_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client smppClient = check new ({
-        host: "localhost",
-        port: TLS_CLIENT_HAPPY_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}
-        }
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = TLS_CLIENT_HAPPY_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}
+            });
     tlsTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
 
@@ -102,16 +97,11 @@ function testClientTlsWithPemCertRoundTrip() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_PEM_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client smppClient = check new ({
-        host: "localhost",
-        port: TLS_CLIENT_PEM_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: SERVER_CERT_PEM // PEM path, not a truststore record
-        }
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = TLS_CLIENT_PEM_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: SERVER_CERT_PEM // PEM path, not a truststore record
+            });
     tlsTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
     SubmitResult r = check smppClient->submit({destinationAddress: "264811234567", shortMessage: "pem tls"});
@@ -125,14 +115,9 @@ function testClientTlsVerificationDisabledConnects() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_NOVERIFY_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client smppClient = check new ({
-        host: "localhost",
-        port: TLS_CLIENT_NOVERIFY_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {disableSslVerification: true} // InsecureSocket: encrypt but don't verify
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = TLS_CLIENT_NOVERIFY_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {disableSslVerification: true}); // InsecureSocket: encrypt but don't verify
     tlsTestClient = smppClient; // succeeded despite no trust anchor
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
     SubmitResult r = check smppClient->submit({destinationAddress: "264811234567", shortMessage: "insecure tls"});
@@ -149,16 +134,11 @@ function testClientTlsUntrustedServerCertFailsHandshake() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_UNTRUSTED_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client|error result = new ({
-        host: "localhost",
-        port: TLS_CLIENT_UNTRUSTED_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: WRONG_TRUSTSTORE, password: CERT_PASS} // does NOT trust the mock
-        }
-    });
+    Client|error result = new ("localhost", "test", "test", port = TLS_CLIENT_UNTRUSTED_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: WRONG_TRUSTSTORE, password: CERT_PASS} // does NOT trust the mock
+            });
     test:assertTrue(result is error, "Client init MUST fail a TLS handshake against an untrusted server certificate");
     if result is error {
         test:assertTrue(result.message().includes("failed to connect/bind to SMSC"),
@@ -182,16 +162,11 @@ function testClientTlsUntrustedServerCertViaPemFailsHandshake() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_UNTRUSTED_PEM_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client|error result = new ({
-        host: "localhost",
-        port: TLS_CLIENT_UNTRUSTED_PEM_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: WRONG_CERT_PEM // PEM of an unrelated cert; does NOT match the mock
-        }
-    });
+    Client|error result = new ("localhost", "test", "test", port = TLS_CLIENT_UNTRUSTED_PEM_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: WRONG_CERT_PEM // PEM of an unrelated cert; does NOT match the mock
+            });
     test:assertTrue(result is error, "Client init MUST fail against an untrusted server cert (PEM trust form)");
     if result is error {
         test:assertTrue(result.message().includes("failed to connect/bind to SMSC"),
@@ -209,17 +184,13 @@ function testClientTlsHostnameMismatchFailsWithVerifyOn() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_HOSTNAME_MISMATCH_PORT, WRONGHOST_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client|error result = new ({
-        host: "localhost", // dialed name...
-        port: TLS_CLIENT_HOSTNAME_MISMATCH_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: WRONGHOST_TRUSTSTORE, password: CERT_PASS} // ...trusts the CN=not-localhost cert
-            // verifyHostName defaults to true
-        }
-    });
+    Client|error result = new ("localhost", "test", "test", // "localhost" is the dialed name...
+            port = TLS_CLIENT_HOSTNAME_MISMATCH_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: WRONGHOST_TRUSTSTORE, password: CERT_PASS} // ...trusts the CN=not-localhost cert
+                // verifyHostName defaults to true
+            });
     test:assertTrue(result is error,
             "must fail: cert is trusted but its identity (not-localhost) does not match the dialed host (localhost)");
     if result is error {
@@ -238,17 +209,12 @@ function testClientTlsHostnameMismatchAllowedWithVerifyOff() returns error? {
     int mockId = check mockSmscOpenTls(TLS_CLIENT_HOSTNAME_RELAXED_PORT, WRONGHOST_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client smppClient = check new ({
-        host: "localhost",
-        port: TLS_CLIENT_HOSTNAME_RELAXED_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: WRONGHOST_TRUSTSTORE, password: CERT_PASS},
-            verifyHostName: false
-        }
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = TLS_CLIENT_HOSTNAME_RELAXED_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: WRONGHOST_TRUSTSTORE, password: CERT_PASS},
+                verifyHostName: false
+            });
     tlsTestClient = smppClient; // succeeds: chain verified, hostname check relaxed
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
     SubmitResult r = check smppClient->submit({destinationAddress: "264811234567", shortMessage: "hostname relaxed"});
@@ -264,17 +230,12 @@ function testClientMutualTlsRoundTrip() returns error? {
             SERVER_TRUSTSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client smppClient = check new ({
-        host: "localhost",
-        port: TLS_CLIENT_MTLS_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}, // verify the server
-            key: {path: CLIENT_KEYSTORE, password: CERT_PASS} // present client identity
-        }
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = TLS_CLIENT_MTLS_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}, // verify the server
+                key: {path: CLIENT_KEYSTORE, password: CERT_PASS} // present client identity
+            });
     tlsTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
     SubmitResult r = check smppClient->submit({destinationAddress: "264811234567", shortMessage: "mtls round-trip"});
@@ -291,16 +252,11 @@ function testClientMutualTlsRequiresClientCert() returns error? {
             SERVER_TRUSTSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Client|error result = new ({
-        host: "localhost",
-        port: TLS_CLIENT_MTLS_NEGATIVE_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS} // verifies the server, but NO client key
-        }
-    });
+    Client|error result = new ("localhost", "test", "test", port = TLS_CLIENT_MTLS_NEGATIVE_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS} // verifies the server, but NO client key
+            });
     test:assertTrue(result is error,
             "must fail: the mock requires a client cert and the Client presented none");
     if result is error {
@@ -318,16 +274,11 @@ function testListenerTlsBindAndDeliverRoundTrip() returns error? {
     int mockId = check mockSmscOpenTls(TLS_LISTENER_HAPPY_PORT, SERVER_KEYSTORE, CERT_PASS);
     tlsTestMockId = mockId;
 
-    Listener smsListener = check new ({
-        host: "localhost",
-        port: TLS_LISTENER_HAPPY_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        secureSocket: {
-            cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}
-        }
-    });
+    Listener smsListener = check new ("localhost", "test", "test", port = TLS_LISTENER_HAPPY_PORT,
+            bindType = TRANSCEIVER,
+            secureSocket = {
+                cert: {path: CLIENT_TRUSTSTORE, password: CERT_PASS}
+            });
     tlsTestListener = smsListener;
     check smsListener.attach(new RecordingService());
     check smsListener.'start();

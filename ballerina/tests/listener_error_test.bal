@@ -47,14 +47,9 @@ function testOnErrorFiresOnAbruptSeveranceThenRebinds() returns error? {
     int mockId = check mockSmscOpen(LISTENER_SEVER_PORT);
     listenerErrorTestMockId = mockId;
 
-    Listener smsListener = check new ({
-        host: "localhost",
-        port: LISTENER_SEVER_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        rebindPolicy: {initialRebindDelay: 0.3, maxRebindDelay: 1, backOffMultiplier: 2.0}
-    });
+    Listener smsListener = check new ("localhost", "test", "test", port = LISTENER_SEVER_PORT,
+            bindType = TRANSCEIVER,
+            rebindPolicy = {initialRebindDelay: 0.3, maxRebindDelay: 1, backOffMultiplier: 2.0});
     listenerErrorTestListener = smsListener;
     check smsListener.attach(new LifecycleRecordingService());
     check smsListener.'start();
@@ -90,14 +85,9 @@ function testPeerInitiatedUnbindAlsoFiresOnErrorAndRebinds() returns error? {
     int mockId = check mockSmscOpen(LISTENER_PEER_UNBIND_PORT);
     listenerErrorTestMockId = mockId;
 
-    Listener smsListener = check new ({
-        host: "localhost",
-        port: LISTENER_PEER_UNBIND_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        rebindPolicy: {initialRebindDelay: 0.3, maxRebindDelay: 1, backOffMultiplier: 2.0}
-    });
+    Listener smsListener = check new ("localhost", "test", "test", port = LISTENER_PEER_UNBIND_PORT,
+            bindType = TRANSCEIVER,
+            rebindPolicy = {initialRebindDelay: 0.3, maxRebindDelay: 1, backOffMultiplier: 2.0});
     listenerErrorTestListener = smsListener;
     check smsListener.attach(new LifecycleRecordingService());
     check smsListener.'start();
@@ -144,13 +134,7 @@ function testCallerSubmitOnReceiverBindIsRejected() returns error? {
 # + return - a `[mockId, connectionId, listener]` tuple, or an error
 function startReceiverListener(int port) returns [int, int, Listener]|error {
     int mockId = check mockSmscOpen(port);
-    Listener smsListener = check new ({
-        host: "localhost",
-        port,
-        systemId: "test",
-        password: "test",
-        bindType: RECEIVER
-    });
+    Listener smsListener = check new ("localhost", "test", "test", port = port, bindType = RECEIVER);
     check smsListener.attach(new CallerCapturingService());
     check smsListener.'start();
     int conn = check mockSmscAwaitNextBind(mockId, 5000);

@@ -2,7 +2,7 @@
 // runtime - both silently inert without the plugin.
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y"});
+listener smpp:Listener lis = new ("localhost", "x", "y");
 
 service on lis {
     resource isolated function get health() returns string {

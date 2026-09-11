@@ -55,14 +55,9 @@ isolated function submitBlocker(Client c) returns SubmitResult|Error {
 function testClientCloseDuringInFlightSubmitYieldsLinkDown() returns error? {
     int mockId = check mockSmscOpen(CLIENT_CLOSE_INFLIGHT_PORT);
     clientCloseTestMockId = mockId;
-    Client smppClient = check new ({
-        host: "localhost",
-        port: CLIENT_CLOSE_INFLIGHT_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER,
-        transactionTimeout: 2 // keep the test fast: the parked submit gives up at this bound
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = CLIENT_CLOSE_INFLIGHT_PORT,
+            bindType = TRANSCEIVER,
+            transactionTimeout = 2); // keep the test fast: the parked submit gives up at this bound
     clientCloseTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
 
@@ -92,13 +87,8 @@ function testClientCloseDuringInFlightSubmitYieldsLinkDown() returns error? {
 function testClientCloseIsIdempotentAndDisallowsFurtherUse() returns error? {
     int mockId = check mockSmscOpen(CLIENT_CLOSE_IDEMPOTENT_PORT);
     clientCloseTestMockId = mockId;
-    Client smppClient = check new ({
-        host: "localhost",
-        port: CLIENT_CLOSE_IDEMPOTENT_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = CLIENT_CLOSE_IDEMPOTENT_PORT,
+            bindType = TRANSCEIVER);
     clientCloseTestClient = smppClient;
     int _ = check mockSmscAwaitNextBind(mockId, 5000);
 
@@ -121,13 +111,8 @@ function testClientCancelAndReplaceAlsoFailAfterClose() returns error? {
     // Every submit-family method shares the same precheck - pin two more, not just submit.
     int mockId = check mockSmscOpen(CLIENT_CLOSE_THEN_SUBMIT_PORT);
     clientCloseTestMockId = mockId;
-    Client smppClient = check new ({
-        host: "localhost",
-        port: CLIENT_CLOSE_THEN_SUBMIT_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = CLIENT_CLOSE_THEN_SUBMIT_PORT,
+            bindType = TRANSCEIVER);
     clientCloseTestClient = smppClient;
     int _ = check mockSmscAwaitNextBind(mockId, 5000);
     check smppClient.close();
@@ -146,13 +131,8 @@ function testClientCancelAndReplaceAlsoFailAfterClose() returns error? {
 function testClientSubmitOnReceiverBindFailsFastWithoutReachingTheWire() returns error? {
     int mockId = check mockSmscOpen(CLIENT_RECEIVER_BIND_PORT);
     clientCloseTestMockId = mockId;
-    Client smppClient = check new ({
-        host: "localhost",
-        port: CLIENT_RECEIVER_BIND_PORT,
-        systemId: "test",
-        password: "test",
-        bindType: RECEIVER
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = CLIENT_RECEIVER_BIND_PORT,
+            bindType = RECEIVER);
     clientCloseTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
 

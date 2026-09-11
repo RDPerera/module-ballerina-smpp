@@ -48,13 +48,8 @@ function testClientBindAndSubmitRoundTrip() returns error? {
 
     // `new` returning without error means the connect AND the bind_resp both succeeded -
     // by the time this line completes, `submit`/`submitMulti`/etc. are ready to use.
-    Client smppClient = check new ({
-        host: "localhost",
-        port: CLIENT_BIND_TEST_PORT,
-        systemId: "esme1",
-        password: "pw-ok",
-        bindType: TRANSCEIVER
-    });
+    Client smppClient = check new ("localhost", "esme1", "pw-ok", port = CLIENT_BIND_TEST_PORT,
+            bindType = TRANSCEIVER);
     clientBindTestClient = smppClient;
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
 
@@ -77,13 +72,8 @@ function testClientBindFailsForInvalidSystemId() returns error? {
     clientBindTestMockId = mockId;
     mockSmscExpectCredentials(mockId, "expected-sys", "pw-ok");
 
-    Client|error result = new ({
-        host: "localhost",
-        port: CLIENT_BIND_BAD_SYSID_PORT,
-        systemId: "wrong-sys",
-        password: "pw-ok",
-        bindType: TRANSCEIVER
-    });
+    Client|error result = new ("localhost", "wrong-sys", "pw-ok", port = CLIENT_BIND_BAD_SYSID_PORT,
+            bindType = TRANSCEIVER);
     test:assertTrue(result is error, "bind with a wrong systemId must fail Client.init");
     if result is error {
         test:assertTrue(result is Error, "the init error must be the distinct smpp:Error type");
@@ -103,13 +93,8 @@ function testClientBindFailsForInvalidPassword() returns error? {
     clientBindTestMockId = mockId;
     mockSmscExpectCredentials(mockId, "expected-sys", "pw-ok");
 
-    Client|error result = new ({
-        host: "localhost",
-        port: CLIENT_BIND_BAD_PASSWORD_PORT,
-        systemId: "expected-sys",
-        password: "wrong-pw",
-        bindType: TRANSCEIVER
-    });
+    Client|error result = new ("localhost", "expected-sys", "wrong-pw", port = CLIENT_BIND_BAD_PASSWORD_PORT,
+            bindType = TRANSCEIVER);
     test:assertTrue(result is error, "bind with a wrong password must fail Client.init");
     if result is error {
         test:assertTrue(result is Error, "the init error must be the distinct smpp:Error type");

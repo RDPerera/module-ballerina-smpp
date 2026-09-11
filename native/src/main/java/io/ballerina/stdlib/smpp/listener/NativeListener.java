@@ -60,6 +60,13 @@ public final class NativeListener {
     private static final String NATIVE_SESSION = "smpp.session";
     private static final String NATIVE_DISPATCHER = "smpp.dispatcher";
     private static final String NATIVE_CONFIG = "smpp.config";
+    // host/systemId/password are ListenerConfig's REQUIRED fields, pulled out as separate
+    // Client.init/Listener.init parameters rather than config record fields (so a caller
+    // cannot forget them) - stored here, once, as plain immutable Strings, since bind()
+    // needs them on every rebind attempt for this listener's whole life, not just once.
+    private static final String NATIVE_HOST = "smpp.host";
+    private static final String NATIVE_SYSTEM_ID = "smpp.systemId";
+    private static final String NATIVE_PASSWORD = "smpp.password";
     private static final String NATIVE_TLS = "smpp.tls";
     private static final String NATIVE_STATE = "smpp.state";
     private static final String NATIVE_STATE_LOCK = "smpp.stateLock";
@@ -166,9 +173,12 @@ public final class NativeListener {
                      : maxConcurrentDispatch + KEEPALIVE_RESERVE_THREADS;
     }
 
-    public static Object initListener(Environment env, BObject listener, BMap<BString, Object> config,
-            Object tls) {
+    public static Object initListener(Environment env, BObject listener, BString hostVal, BString systemIdVal,
+            BString passwordVal, BMap<BString, Object> config, Object tls) {
         listener.addNativeData(NATIVE_CONFIG, config);
+        listener.addNativeData(NATIVE_HOST, hostVal.getValue());
+        listener.addNativeData(NATIVE_SYSTEM_ID, systemIdVal.getValue());
+        listener.addNativeData(NATIVE_PASSWORD, passwordVal.getValue());
         // The flat ResolvedTls record from types.bal (null = plaintext). Stored once at
         // init like everything else; read on every bind attempt by newSession().
         listener.addNativeData(NATIVE_TLS, tls);
@@ -338,10 +348,10 @@ public final class NativeListener {
                 attemptConn, (long) (decimalValue(config, "transactionTimeout") * 1000));
         session.setMessageReceiverListener(dispatcher);
 
-        String host = str(config, "host");
+        String host = (String) listener.getNativeData(NATIVE_HOST);
         int port = (int) ((Long) config.getIntValue(StringUtils.fromString("port"))).longValue();
-        String systemId = str(config, "systemId");
-        String password = str(config, "password");
+        String systemId = (String) listener.getNativeData(NATIVE_SYSTEM_ID);
+        String password = (String) listener.getNativeData(NATIVE_PASSWORD);
         String systemType = str(config, "systemType");
         validateCredentials(systemId, password, systemType);
         BindType bindType = toBindType(str(config, "bindType"));

@@ -129,10 +129,7 @@ A `Client` accepts any of the three. `TRANSMITTER` is send-only (the SMSC never 
 
 ```ballerina
 public type ClientConfig record {|
-    string host;
     int port = 2775;
-    string systemId;
-    string password;
     string systemType = "";
     BindType bindType = TRANSCEIVER;
     decimal bindTimeout = 60;
@@ -140,9 +137,12 @@ public type ClientConfig record {|
     decimal enquireLinkInterval = 60;
     (SecureSocket|InsecureSocket)? secureSocket = ();
 |};
+
+public isolated function init(string host, string systemId, string password,
+        *ClientConfig config) returns Error?;
 ```
 
-`init` connects and binds synchronously; a `Client` that returns from `init` without error is bound and ready to submit. `bindTimeout` bounds the connect-and-bind handshake; `transactionTimeout` bounds every subsequent submit-family request's wait for its response; `enquireLinkInterval` is the client's own keepalive/idle-probe cadence, used to detect a silently dead link.
+`host`, `systemId`, and `password` are required parameters of `init` itself, not `ClientConfig` fields — matching the convention other multi-field-config Ballerina connectors use (e.g. `rabbitmq:Client.init(string host, int port, *ConnectionConfiguration connectionData)`) so a caller cannot forget them. `init` connects and binds synchronously; a `Client` that returns from `init` without error is bound and ready to submit. `bindTimeout` bounds the connect-and-bind handshake; `transactionTimeout` bounds every subsequent submit-family request's wait for its response; `enquireLinkInterval` is the client's own keepalive/idle-probe cadence, used to detect a silently dead link.
 
 ### 4.3 Outbound message shapes
 
@@ -247,10 +247,7 @@ public type ListenerBindType RECEIVER|TRANSCEIVER;
 
 ```ballerina
 public type ListenerConfig record {|
-    string host;
     int port = 2775;
-    string systemId;
-    string password;
     string systemType = "";
     ListenerBindType bindType = RECEIVER;
     int maxConcurrentDispatch = 3;
@@ -263,9 +260,12 @@ public type ListenerConfig record {|
     decimal transactionTimeout = 30;
     (SecureSocket|InsecureSocket)? secureSocket = ();
 |};
+
+public isolated function init(string host, string systemId, string password,
+        *ListenerConfig config) returns error?;
 ```
 
-`init` validates configuration only; the connect-and-bind happens at `'start()` (called automatically by the runtime for a `listener` declaration, or explicitly for a dynamically-registered one). `maxConcurrentDispatch` bounds how many inbound PDUs run through the attached service at once — excess is answered `ESME_RTHROTTLED` so the SMSC backs off and retains the message, per SMPP's at-least-once delivery model.
+As with `Client`, `host`, `systemId`, and `password` are required parameters of `init` itself, not `ListenerConfig` fields. `init` validates configuration only; the connect-and-bind happens at `'start()` (called automatically by the runtime for a `listener` declaration, or explicitly for a dynamically-registered one). `maxConcurrentDispatch` bounds how many inbound PDUs run through the attached service at once — excess is answered `ESME_RTHROTTLED` so the SMSC backs off and retains the message, per SMPP's at-least-once delivery model.
 
 ### 5.3 Service declaration
 

@@ -7,7 +7,7 @@
 // compiles -> harness FAIL).
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y", bindType: smpp:TRANSCEIVER});
+listener smpp:Listener lis = new ("localhost", "x", "y", bindType = smpp:TRANSCEIVER);
 
 service on lis {
 	remote function onDeliverSm(smpp:Sms sms) returns error? {

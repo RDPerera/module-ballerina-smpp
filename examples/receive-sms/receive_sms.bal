@@ -22,13 +22,7 @@ configurable int port = ?;
 configurable string systemId = ?;
 configurable string password = ?;
 
-listener smpp:Listener smsListener = check new ({
-    host,
-    port,
-    systemId,
-    password,
-    bindType: smpp:RECEIVER
-});
+listener smpp:Listener smsListener = check new (host, systemId, password, port = port, bindType = smpp:RECEIVER);
 
 service on smsListener {
 

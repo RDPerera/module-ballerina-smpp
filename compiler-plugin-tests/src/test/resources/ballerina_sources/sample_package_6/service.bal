@@ -2,7 +2,7 @@
 // getMethods()) and silently stops firing on 1.1.0 (getRemoteMethods()).
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y"});
+listener smpp:Listener lis = new ("localhost", "x", "y");
 
 service on lis {
     isolated function onDeliverSm(smpp:Sms sms) returns error? {

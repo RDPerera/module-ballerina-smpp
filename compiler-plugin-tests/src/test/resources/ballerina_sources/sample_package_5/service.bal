@@ -6,5 +6,5 @@
 // if the recognition path breaks, the code goes missing and the harness fails.
 import ballerina/smpp;
 
-service on new smpp:Listener({host: "localhost", systemId: "x", password: "y"}) {
+service on new smpp:Listener("localhost", "x", "y") {
 }

@@ -25,13 +25,7 @@ configurable string destinationNumber = ?;
 
 public function main() returns error? {
     // TRANSMITTER is enough for a send-only program.
-    smpp:Client smppClient = check new ({
-        host,
-        port,
-        systemId,
-        password,
-        bindType: smpp:TRANSMITTER
-    });
+    smpp:Client smppClient = check new (host, systemId, password, port = port, bindType = smpp:TRANSMITTER);
 
     smpp:SubmitResult|smpp:Error result = smppClient->submit({
         destinationAddress: destinationNumber,

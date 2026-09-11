@@ -39,17 +39,15 @@ public enum ResponseMode {
     ASYNC
 }
 
-# Configuration used to connect and bind the `Listener` to an SMSC.
+# Configuration used to connect and bind the `Listener` to an SMSC. `host`, `systemId`,
+# and `password` are not fields here — they are required, positional/named parameters of
+# `Listener.init` itself (matching how e.g. `rabbitmq:Client` pulls `host`/`port` out as
+# `init` parameters ahead of its included config record), so a caller cannot forget them
+# the way a record field with no visible required-ness marker in a call site can be missed.
 public type ListenerConfig record {|
-    # SMSC host name or IP address.
-    string host;
     # SMSC port. Defaults to the common SMPP port `2775`. Must be 1-65535 (validated
     # at `Listener` init).
     int port = 2775;
-    # The `system_id` (username) used to bind.
-    string systemId;
-    # The password used to bind.
-    string password;
     # The optional `system_type`. Empty by default.
     string systemType = "";
     # The bind mode. Defaults to `RECEIVER`. Typed as `ListenerBindType`
@@ -183,11 +181,15 @@ public isolated class Listener {
     # Creates a new SMPP listener for the given SMSC connection configuration. No network
     # activity happens at this point — the connect-and-bind handshake runs at `start()`.
     #
-    # + config - the connection/bind configuration
+    # + host - SMSC host name or IP address
+    # + systemId - the `system_id` (username) used to bind
+    # + password - the password used to bind
+    # + config - the rest of the connection/bind configuration
     # + return - an `Error` if `config` fails validation (see the field docs on
     #   `ListenerConfig`/`RebindPolicy` for the exact bounds checked), or if the
     #   native listener setup fails
-    public isolated function init(ListenerConfig config) returns error? {
+    public isolated function init(string host, string systemId, string password,
+            *ListenerConfig config) returns error? {
         check validateConfig(config);
         // Frozen, not the caller's own record: config is plain anydata, so cloneReadOnly()
         // produces a fully independent deep copy. Without this, the native layer would hold
@@ -196,10 +198,11 @@ public isolated class Listener {
         // dispatch), so the caller mutating that same record after construction (e.g.
         // config.port = ...) would silently change where/how future rebinds connect.
         ListenerConfig frozenConfig = config.cloneReadOnly();
-        check self.externInit(frozenConfig, resolveTls(config.secureSocket));
+        check self.externInit(host, systemId, password, frozenConfig, resolveTls(config.secureSocket));
     }
 
-    isolated function externInit(ListenerConfig config, ResolvedTls? tls) returns error? = @java:Method {
+    isolated function externInit(string host, string systemId, string password, ListenerConfig config,
+            ResolvedTls? tls) returns error? = @java:Method {
         'class: "io.ballerina.stdlib.smpp.listener.NativeListener",
         name: "initListener"
     } external;

@@ -10,6 +10,6 @@ isolated service class Typo {
 }
 
 public function main() returns error? {
-    smpp:Listener lis = check new ({host: "localhost", systemId: "x", password: "y"});
+    smpp:Listener lis = check new ("localhost", "x", "y");
     check lis.attach(new Typo());
 }

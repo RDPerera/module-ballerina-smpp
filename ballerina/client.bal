@@ -16,17 +16,15 @@
 
 import ballerina/jballerina.java;
 
-# Configuration used to connect and bind a `Client` to an SMSC.
+# Configuration used to connect and bind a `Client` to an SMSC. `host`, `systemId`, and
+# `password` are not fields here — they are required, positional/named parameters of
+# `Client.init` itself (matching how e.g. `rabbitmq:Client` pulls `host`/`port` out as
+# `init` parameters ahead of its included config record), so a caller cannot forget them
+# the way a record field with no visible required-ness marker in a call site can be missed.
 public type ClientConfig record {|
-    # SMSC host name or IP address.
-    string host;
     # SMSC port. Defaults to the common SMPP port `2775`. Must be 1-65535 (validated at
     # `Client` init).
     int port = 2775;
-    # The `system_id` (username) used to bind.
-    string systemId;
-    # The password used to bind.
-    string password;
     # The optional `system_type`. Empty by default.
     string systemType = "";
     # The bind mode. Defaults to `TRANSCEIVER`. Unlike a `Listener` (whose
@@ -84,12 +82,16 @@ public isolated client class Client {
     # Connects and binds to the SMSC. This runs synchronously: by the time this returns
     # successfully, the session is bound and every remote method is ready to use.
     #
-    # + config - the connection/bind configuration
+    # + host - SMSC host name or IP address
+    # + systemId - the `system_id` (username) used to bind
+    # + password - the password used to bind
+    # + config - the rest of the connection/bind configuration
     # + return - an `Error` if `config` fails validation (see the field docs on
     #   `ClientConfig` for the exact bounds checked), or if the connect/bind itself fails
     #   (bad credentials, an oversized `systemId`/`password`/`systemType`, an unreachable
     #   host, or a bind the SMSC rejected)
-    public isolated function init(ClientConfig config) returns Error? {
+    public isolated function init(string host, string systemId, string password,
+            *ClientConfig config) returns Error? {
         check validateClientConfig(config);
         // Frozen, not the caller's own record: config is plain anydata, so cloneReadOnly()
         // produces a fully independent deep copy. Without this, the native layer would hold
@@ -97,10 +99,11 @@ public isolated client class Client {
         // construction (e.g. config.bindType = ...) would change what later calls observe -
         // even though the actual wire-level bind, negotiated once below, never changes.
         ClientConfig frozenConfig = config.cloneReadOnly();
-        return self.externInit(frozenConfig, resolveTls(config.secureSocket));
+        return self.externInit(host, systemId, password, frozenConfig, resolveTls(config.secureSocket));
     }
 
-    isolated function externInit(ClientConfig config, ResolvedTls? tls) returns Error? = @java:Method {
+    isolated function externInit(string host, string systemId, string password, ClientConfig config,
+            ResolvedTls? tls) returns Error? = @java:Method {
         'class: "io.ballerina.stdlib.smpp.client.NativeClient",
         name: "init"
     } external;

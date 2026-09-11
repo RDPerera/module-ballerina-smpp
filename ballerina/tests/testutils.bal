@@ -212,13 +212,7 @@ function pollUntil(function () returns boolean cond, decimal timeoutSeconds) ret
 # + return - `[mockId, connectionId, listener]`, or an error
 function startListener(int port, Service svc) returns [int, int, Listener]|error {
     int mockId = check mockSmscOpen(port);
-    Listener smsListener = check new ({
-        host: "localhost",
-        port,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER
-    });
+    Listener smsListener = check new ("localhost", "test", "test", port = port, bindType = TRANSCEIVER);
     check smsListener.attach(svc);
     check smsListener.'start();
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
@@ -233,13 +227,7 @@ function startListener(int port, Service svc) returns [int, int, Listener]|error
 # + return - a `[mockId, connectionId, client]` tuple, or an error
 function startClient(int port) returns [int, int, Client]|error {
     int mockId = check mockSmscOpen(port);
-    Client smppClient = check new ({
-        host: "localhost",
-        port,
-        systemId: "test",
-        password: "test",
-        bindType: TRANSCEIVER
-    });
+    Client smppClient = check new ("localhost", "test", "test", port = port, bindType = TRANSCEIVER);
     int conn = check mockSmscAwaitNextBind(mockId, 5000);
     return [mockId, conn, smppClient];
 }

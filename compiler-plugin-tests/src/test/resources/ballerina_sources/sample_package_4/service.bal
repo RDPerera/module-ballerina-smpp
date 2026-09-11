@@ -2,7 +2,7 @@
 // be dispatched. (This is also where the editor offers the five handler templates.)
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y"});
+listener smpp:Listener lis = new ("localhost", "x", "y");
 
 service on lis {
 }

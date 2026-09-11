@@ -22,17 +22,18 @@ import ballerina/test;
 @test:Config {groups: ["client", "config"]}
 function testClientConfigValidationRejectsOutOfBoundsValues() {
     record {|ClientConfig config; string expect;|}[] cases = [
-        {config: {host: "h", systemId: "s", password: "p", port: 0}, expect: "port"},
-        {config: {host: "h", systemId: "s", password: "p", port: 65536}, expect: "port"},
-        {config: {host: "h", systemId: "s", password: "p", bindTimeout: 0.5}, expect: "bindTimeout"},
-        {config: {host: "h", systemId: "s", password: "p", bindTimeout: 60000}, expect: "bindTimeout"},
-        {config: {host: "h", systemId: "s", password: "p", transactionTimeout: 0.5}, expect: "transactionTimeout"},
-        {config: {host: "h", systemId: "s", password: "p", transactionTimeout: 30000}, expect: "transactionTimeout"},
-        {config: {host: "h", systemId: "s", password: "p", enquireLinkInterval: 2}, expect: "enquireLinkInterval"},
-        {config: {host: "h", systemId: "s", password: "p", enquireLinkInterval: 60000}, expect: "enquireLinkInterval"}
+        {config: {port: 0}, expect: "port"},
+        {config: {port: 65536}, expect: "port"},
+        {config: {bindTimeout: 0.5}, expect: "bindTimeout"},
+        {config: {bindTimeout: 60000}, expect: "bindTimeout"},
+        {config: {transactionTimeout: 0.5}, expect: "transactionTimeout"},
+        {config: {transactionTimeout: 30000}, expect: "transactionTimeout"},
+        {config: {enquireLinkInterval: 2}, expect: "enquireLinkInterval"},
+        {config: {enquireLinkInterval: 60000}, expect: "enquireLinkInterval"}
     ];
     foreach var {config, expect} in cases {
-        Client|error result = new (config);
+        Client|error result = new Client("h", "s", "p", port = config.port, bindTimeout = config.bindTimeout,
+                transactionTimeout = config.transactionTimeout, enquireLinkInterval = config.enquireLinkInterval);
         test:assertTrue(result is error, string `config with out-of-bounds ${expect} must fail init`);
         if result is error {
             test:assertTrue(result is Error,
@@ -54,15 +55,8 @@ function testClientConfigValidationAcceptsBoundaryValues() {
     // rejecting the boundary values themselves - which is exactly what this test pins:
     // the failure (if any) must be a CONNECT failure, never a "must be"/"must not" from
     // validateClientConfig.
-    Client|error result = new ({
-        host: "localhost",
-        systemId: "s",
-        password: "p",
-        port: CLIENT_CONFIG_BOUNDARY_PORT,
-        bindTimeout: 1,
-        transactionTimeout: 300,
-        enquireLinkInterval: 3600
-    });
+    Client|error result = new ("localhost", "s", "p", port = CLIENT_CONFIG_BOUNDARY_PORT,
+            bindTimeout = 1, transactionTimeout = 300, enquireLinkInterval = 3600);
     test:assertTrue(result is error, "nothing listens on this port - connect must fail");
     if result is error {
         test:assertFalse(result.message().includes("must be") || result.message().includes("must not"),

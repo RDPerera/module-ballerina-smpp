@@ -2,7 +2,7 @@
 // missing its Sms, and a duplicate Sms.
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y", bindType: smpp:TRANSCEIVER});
+listener smpp:Listener lis = new ("localhost", "x", "y", bindType = smpp:TRANSCEIVER);
 
 service on lis {
     remote isolated function onDeliverSm(smpp:Sms sms, smpp:Caller? caller = ()) returns error? {

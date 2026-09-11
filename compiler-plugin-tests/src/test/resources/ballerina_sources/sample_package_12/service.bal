@@ -8,7 +8,7 @@
 // the first version of this fixture got that wrong and the plugin rightly stayed quiet.
 import ballerina/smpp;
 
-listener smpp:Listener lis = new ({host: "localhost", systemId: "x", password: "y"});
+listener smpp:Listener lis = new ("localhost", "x", "y");
 
 int counter = 0;
 
