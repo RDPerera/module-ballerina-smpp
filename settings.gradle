@@ -26,9 +26,11 @@ rootProject.name = "module-ballerina-${projectName}"
 include ":checkstyle"
 include ":${projectName}-native"
 include ":${projectName}-compiler-plugin"
+include ":${projectName}-compiler-plugin-tests"
 include ":${projectName}-ballerina"
 
 project(":checkstyle").projectDir = file("build-config${File.separator}checkstyle")
 project(":${projectName}-native").projectDir = file('native')
 project(":${projectName}-compiler-plugin").projectDir = file('compiler-plugin')
+project(":${projectName}-compiler-plugin-tests").projectDir = file('compiler-plugin-tests')
 project(":${projectName}-ballerina").projectDir = file('ballerina')

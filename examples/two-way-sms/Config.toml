@@ -1,0 +1,6 @@
+[two_way_sms]
+host = "smsc.example.com"
+port = 2775
+systemId = "your-system-id"
+password = "your-password"
+shortCode = "12345"

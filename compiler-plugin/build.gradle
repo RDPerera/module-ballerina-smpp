@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org) All Rights Reserved.
+ * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org).
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -85,16 +85,6 @@ jar {
     archiveBaseName = 'smpp-compiler-plugin'
 }
 
-// End-to-end diagnostic tests: fixture projects compiled by the SAME dockerised bal
-// distribution the rest of this repo builds with, against the locally-pushed bala -
-// i.e. exactly what a Central consumer executes, bundled plugin and all. See
-// tests/run-fixture-tests.sh for the assertion mechanics (expected diagnostics per
-// fixture). Runs as part of `check`, so `./gradlew build` gates on it.
-tasks.register('fixtureTest', Exec) {
-    dependsOn jar
-    dependsOn ':smpp-native:build'
-    dependsOn ':smpp-ballerina:copyToLib'
-    workingDir projectDir
-    commandLine 'bash', 'tests/run-fixture-tests.sh'
-}
-check.dependsOn 'fixtureTest'
+// End-to-end diagnostic tests live in the sibling :smpp-compiler-plugin-tests module
+// (TestNG + io.ballerina.projects APIs, matching module-ballerina-email/
+// module-ballerinax-kafka's own compiler-plugin-tests convention) rather than here.

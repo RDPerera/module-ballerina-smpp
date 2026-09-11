@@ -1,4 +1,4 @@
-// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.org) All Rights Reserved.
+// Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org).
 //
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
@@ -14,28 +14,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// send-sms — the smallest possible `ballerina/smpp` program: bind to an SMSC as a
-// TRANSMITTER, submit one text message, and close. This is the starting point for
-// any send-side integration (OTPs, alerts, notifications, ...).
 import ballerina/io;
 import ballerina/smpp;
 
-// Connection settings. The defaults match the bundled mock SMSC, so this example
-// runs as-is against `examples/mock-smsc$ ./gradlew run --args="steady 2775"`.
-// Override with a Config.toml or `bal run -- -Chost=... -Cport=...` for a real SMSC.
-configurable string host = "localhost";
-configurable int port = 2775;
-configurable string systemId = "esme";
-configurable string password = "password";
-
-// The recipient MSISDN. A plain string is shorthand for an international ISDN
-// address (smpp:TON_INTERNATIONAL / smpp:NPI_ISDN) — see smpp:Address for short
-// codes or alphanumeric sender IDs.
-configurable string destinationNumber = "447700900001";
+configurable string host = ?;
+configurable int port = ?;
+configurable string systemId = ?;
+configurable string password = ?;
+configurable string destinationNumber = ?;
 
 public function main() returns error? {
-    // TRANSMITTER is the right bind for a send-only program: it never receives
-    // deliver_sm/data_sm, so a RECEIVER/TRANSCEIVER-only credential is not needed.
+    // TRANSMITTER is enough for a send-only program.
     smpp:Client smppClient = check new ({
         host,
         port,
@@ -47,18 +36,11 @@ public function main() returns error? {
     smpp:SubmitResult|smpp:Error result = smppClient->submit({
         destinationAddress: destinationNumber,
         shortMessage: "Hello from Ballerina SMPP!",
-        // Ask the SMSC for a receipt so a receive-side listener (see the
-        // receive-sms example) can observe delivery — this program itself does
-        // not wait for one; a Client has no receive path.
         registeredDelivery: smpp:ON_SUCCESS_OR_FAILURE
     });
 
     if result is smpp:Error {
-        // `possiblySubmitted` is the bit to branch retry logic on: `false` means a
-        // retry cannot duplicate the message.
-        io:println(string `submit failed: ${result.message()}`,
-                ` failureMode=${result.detail().failureMode ?: "()"}`,
-                ` possiblySubmitted=${result.detail().possiblySubmitted ?: "()"}`);
+        io:println(string `submit failed: ${result.message()}`);
     } else {
         io:println(string `submitted - messageId=${result.messageId}`);
     }

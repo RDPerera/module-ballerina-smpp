@@ -1,4 +1,4 @@
-// Copyright (c) 2026 WSO2 LLC. (http://www.wso2.org) All Rights Reserved.
+// Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org).
 //
 // WSO2 LLC. licenses this file to you under the Apache License,
 // Version 2.0 (the "License"); you may not use this file except
@@ -14,27 +14,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// two-way-sms — a balance-enquiry short code, modeled on the classic telecom
-// "text BAL to 12345" self-care flow: a subscriber texts a keyword to a short code
-// and a service replies on the same session, inline, with the answer.
-//
-// This needs the connector's bidirectional surface: a service declares an
-// `smpp:Caller` parameter and replies with `caller->submit` on the SAME SMSC
-// session the inbound message arrived on. Replying requires `bindType:
-// TRANSCEIVER` (a RECEIVER bind cannot transmit), and `responseMode: ASYNC` is the
-// documented recommendation for reply-style services: in SYNC mode a slow inline
-// reply can delay the deliver_sm_resp past the SMSC's own transaction timer,
-// causing the SMSC to redeliver the inbound message and this service to answer it
-// twice.
 import ballerina/log;
 import ballerina/smpp;
 
-configurable string host = "localhost";
-configurable int port = 2775;
-configurable string systemId = "esme";
-configurable string password = "password";
-// The short code subscribers see as the sender of every reply.
-configurable string shortCode = "12345";
+configurable string host = ?;
+configurable int port = ?;
+configurable string systemId = ?;
+configurable string password = ?;
+configurable string shortCode = ?;
 
 listener smpp:Listener smsListener = check new ({
     host,
@@ -45,11 +32,8 @@ listener smpp:Listener smsListener = check new ({
     responseMode: smpp:ASYNC
 });
 
-// A pretend account balance lookup. Production code would call a billing/OCS
-// system here; the shape of the reply flow is the point of this example.
+// Stand-in for a real billing/OCS lookup.
 isolated function lookupBalance(string subscriber) returns decimal {
-    // Deterministic "balance" derived from the subscriber number, purely so the
-    // mock produces a stable, repeatable demo value per MSISDN.
     int codepointSum = 0;
     foreach int cp in subscriber.toCodePointInts() {
         codepointSum += cp;
@@ -68,8 +52,6 @@ isolated service on smsListener {
         }
 
         string subscriber = sms.sourceAddress;
-        // Keywords are matched on the first word, case-insensitively - real
-        // subscribers send "BAL", "bal please", "Bal now", etc.
         string keyword = firstWord(sms.shortMessage).toUpperAscii();
 
         match keyword {
@@ -90,9 +72,7 @@ isolated service on smsListener {
     }
 }
 
-// Replies to `subscriber` from the configured short code and logs the outcome.
-// Errors carry the retry-safety bit `possiblySubmitted`: `false` means a retry
-// cannot duplicate the message; `true` means the SMSC may already have accepted it.
+// Replies on the same session, from the configured short code.
 isolated function replyTo(smpp:Caller caller, string subscriber, string text) {
     smpp:SubmitResult|smpp:Error result = caller->submit({
         destinationAddress: subscriber,
@@ -100,16 +80,12 @@ isolated function replyTo(smpp:Caller caller, string subscriber, string text) {
         shortMessage: text
     });
     if result is smpp:Error {
-        log:printError("reply failed", 'error = result,
-                failureMode = result.detail().failureMode,
-                possiblySubmitted = result.detail().possiblySubmitted);
+        log:printError("reply failed", 'error = result, failureMode = result.detail().failureMode);
     } else {
         log:printInfo("reply submitted", to = subscriber, messageId = result.messageId);
     }
 }
 
-// Returns the first whitespace-delimited token of a message (trimmed), or the whole
-// trimmed string when there is no space.
 isolated function firstWord(string message) returns string {
     string trimmed = message.trim();
     int? space = trimmed.indexOf(" ");

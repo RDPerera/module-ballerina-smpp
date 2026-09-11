@@ -2,7 +2,7 @@
 org = "ballerina_examples"
 name = "send_sms"
 version = "1.0.0"
-distribution = "2201.13.4"
+distribution = "2201.12.0"
 
 # Resolves `ballerina/smpp` from the local repository (populated by `./gradlew build`
 # in the repo root, which pushes ballerina/smpp there) rather than Central, since this

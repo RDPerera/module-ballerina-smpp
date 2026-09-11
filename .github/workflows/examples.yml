@@ -2,9 +2,9 @@ name: Examples
 
 # Builds every example against the in-repo ballerina/smpp module (each example's
 # Ballerina.toml resolves the dependency with `repository = "local"` — see
-# examples/README.md's "Note on the library dependency" — since the module has not
-# had its first Central publish yet) plus the mock SMSC harness, so the examples
-# can't silently rot.
+# examples/README.md — since the module has not had its first Central publish yet).
+# Compile-only: every example needs a real SMSC (via Config.toml) to actually run,
+# which CI does not have.
 on:
   push:
     branches: [ main ]
@@ -30,7 +30,7 @@ jobs:
       - name: Set up Ballerina
         uses: ballerina-platform/setup-ballerina@v1.1.0
         with:
-          version: 2201.13.4
+          version: 2201.12.0
 
       # Each example resolves `ballerina/smpp` with `repository = "local"`, which needs the
       # package actually present in the local Ballerina repository, not just built on disk -
@@ -55,38 +55,3 @@ jobs:
             (cd "$dir" && bal build)
             echo "::endgroup::"
           done
-
-      # Run-and-assert: start the mock SMSC's `steady` scenario, run each example
-      # against it, and check it logs the expected line. Proves the examples work
-      # end to end, not just that they compile.
-      - name: Start the mock SMSC
-        working-directory: examples/mock-smsc
-        run: |
-          nohup ./gradlew run --args="steady 2775" > mock-smsc.log 2>&1 &
-          echo $! > mock-smsc.pid
-          sleep 20
-
-      - name: Smoke-test send-sms
-        working-directory: examples/send-sms
-        run: |
-          bal run | tee run.log
-          grep -q "submitted - messageId=" run.log
-
-      - name: Smoke-test receive-sms
-        working-directory: examples/receive-sms
-        run: |
-          timeout 15s bal run > run.log 2>&1 || true
-          cat run.log
-          grep -q "inbound SMS received" run.log
-
-      - name: Smoke-test two-way-sms
-        working-directory: examples/two-way-sms
-        run: |
-          timeout 15s bal run > run.log 2>&1 || true
-          cat run.log
-          grep -q "reply submitted" run.log
-
-      - name: Stop the mock SMSC
-        if: always()
-        working-directory: examples/mock-smsc
-        run: kill "$(cat mock-smsc.pid)" 2>/dev/null || true

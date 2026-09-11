@@ -2,8 +2,11 @@
 *.class
 # Log file
 *.log
-# Config file (may carry real credentials for testing against a real SMSC)
+# Config file (may carry real credentials for testing against a real SMSC)...
 **/Config.toml
+# ...except the example Config.toml templates, which only ever hold placeholder
+# values and are meant to be committed (matching real ballerina-platform examples).
+!examples/*/Config.toml
 # BlueJ files
 *.ctxt
 # Mobile Tools for Java (J2ME)
@@ -45,9 +48,8 @@ gradle-app.setting
 velocity.log*
 *Ballerina.lock
 
-# Auto generated Dependencies.toml/Config.toml files
+# Auto generated Dependencies.toml files
 examples/**/Dependencies.toml
-examples/**/Config.toml
 
 # VSCode
 .vscode

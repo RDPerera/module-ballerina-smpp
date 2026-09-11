@@ -3,14 +3,14 @@ org = "ballerina"
 name = "smpp"
 version = "@toml.version@"
 authors = ["Ballerina"]
-keywords = ["smpp", "sms", "messaging", "Type/Connector", "Type/Trigger", "Area/Built-in", "Name/SMPP"]
+keywords = ["smpp", "sms", "messaging", "Type/Connector", "Type/Trigger", "Area/Built-in", "Area/Messaging", "Name/SMPP"]
 repository = "https://github.com/ballerina-platform/module-ballerina-smpp"
 icon = "icon.png"
 license = ["Apache-2.0"]
 # Must stay in lockstep with `ballerinaLangVersion` in gradle.properties — the
 # io.ballerina.plugin harness builds and tests the package with exactly that distribution,
 # so declaring a higher minimum here would claim support for a version nothing is built on.
-distribution = "2201.13.4"
+distribution = "2201.12.0"
 
 [build-options]
 observabilityIncluded = false
