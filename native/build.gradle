@@ -1,0 +1,113 @@
+/*
+ * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org) All Rights Reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+plugins {
+    id 'java-library'
+    id 'checkstyle'
+}
+
+description = 'Ballerina - SMPP Native'
+
+// The native glue compiles against Ballerina's Java-interop API (io.ballerina.runtime.api.*).
+// The runtime is resolved from Maven (org.ballerinalang:ballerina-runtime, served from GitHub
+// Packages via the repos in the root build.gradle) — matching how module-ballerina-* stdlib
+// modules do it, with no dependency on a local `bal` install or the distribution's on-disk
+// layout. It is compileOnly for the main glue because the real classes are supplied by the
+// Ballerina runtime at execution time.
+
+dependencies {
+    checkstyle project(':checkstyle')
+    checkstyle "com.puppycrawl.tools:checkstyle:${checkstylePluginVersion}"
+
+    compileOnly "org.ballerinalang:ballerina-runtime:${ballerinaLangVersion}"
+    implementation group: 'org.jsmpp', name: 'jsmpp', version: "${jsmppVersion}"
+
+    testImplementation "org.ballerinalang:ballerina-runtime:${ballerinaLangVersion}"
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+}
+
+checkstyle {
+    toolVersion '7.8.2'
+    configFile rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    configProperties = ["suppressionFile" : file("${rootDir}/build-config/checkstyle/build/suppressions.xml")]
+}
+
+def excludePattern = '**/module-info.java'
+tasks.withType(Checkstyle) {
+    exclude excludePattern
+}
+
+checkstyleMain.dependsOn(":checkstyle:downloadCheckstyleRuleFiles")
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed', 'skipped', 'failed'
+        exceptionFormat 'full'
+    }
+}
+
+jar {
+    archiveBaseName = 'smpp-native'
+}
+
+// A test-only mock-SMSC bridge (bind + submit-family capture/scripting for both a
+// Listener-driving push and a Client-driving request/response), consumed by
+// smpp/ballerina/tests/mocksmsc.bal via `scope = "testOnly"` in Ballerina.toml — never
+// shipped in the production package. A distinct source set (not the main jar) so it can't
+// accidentally end up in what gets published.
+sourceSets {
+    testBridge {
+        java {
+            srcDirs = ['src/testBridge/java']
+        }
+    }
+}
+
+configurations {
+    testBridgeImplementation.extendsFrom implementation
+}
+
+dependencies {
+    testBridgeImplementation group: 'org.jsmpp', name: 'jsmpp', version: "${jsmppVersion}"
+    // Ballerina's `string` interops as BString, not java.lang.String directly.
+    testBridgeCompileOnly "org.ballerinalang:ballerina-runtime:${ballerinaLangVersion}"
+}
+
+tasks.register('testBridgeJar', Jar) {
+    archiveBaseName = 'smpp-native-test-bridge'
+    from sourceSets.testBridge.output
+}
+
+build.dependsOn testBridgeJar
+
+// The testBridge sourceSet is test-only scaffolding, not part of the checked module's
+// production style surface - skip checkstyle for it rather than fighting the shared
+// ruleset over test-harness code.
+tasks.matching { it.name == 'checkstyleTestBridge' }.configureEach {
+    enabled = false
+}

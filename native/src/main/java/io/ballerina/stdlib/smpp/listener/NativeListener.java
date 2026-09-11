@@ -1,0 +1,1060 @@
+/*
+ * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org) All Rights Reserved.
+ *
+ * WSO2 LLC. licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file except
+ * in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package io.ballerina.stdlib.smpp.listener;
+
+import io.ballerina.runtime.api.Environment;
+import io.ballerina.runtime.api.creators.ValueCreator;
+import io.ballerina.runtime.api.utils.StringUtils;
+import io.ballerina.runtime.api.values.BArray;
+import io.ballerina.runtime.api.values.BDecimal;
+import io.ballerina.runtime.api.values.BMap;
+import io.ballerina.runtime.api.values.BObject;
+import io.ballerina.runtime.api.values.BString;
+import io.ballerina.stdlib.smpp.ModuleUtils;
+import io.ballerina.stdlib.smpp.ObservedConnection;
+import io.ballerina.stdlib.smpp.RawConnectionFactory;
+import io.ballerina.stdlib.smpp.SmppPlainConnectionFactory;
+import io.ballerina.stdlib.smpp.SmppSslConnectionFactory;
+import org.jsmpp.bean.BindType;
+import org.jsmpp.bean.NumberingPlanIndicator;
+import org.jsmpp.bean.TypeOfNumber;
+import org.jsmpp.extra.SessionState;
+import org.jsmpp.session.SMPPSession;
+
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+/**
+ * Backs the Ballerina {@code smpp:Listener} lifecycle methods. State (the jsmpp
+ * session, the dispatcher, the config, and rebind bookkeeping) is kept as
+ * native data on the listener {@link BObject}.
+ *
+ * <p>On an unexpected session drop (detected via jsmpp's {@code SessionStateListener}
+ * transitioning to {@code CLOSED} without a user-initiated {@code gracefulStop}/
+ * {@code immediateStop}), the attached service's optional {@code onError} method is
+ * notified, and — per {@code ListenerConfig.rebindPolicy} — a rebind loop with
+ * exponential backoff is scheduled. A user-initiated stop always cancels any pending
+ * rebind attempt.
+ */
+public final class NativeListener {
+
+    private static final String NATIVE_SESSION = "smpp.session";
+    private static final String NATIVE_DISPATCHER = "smpp.dispatcher";
+    private static final String NATIVE_CONFIG = "smpp.config";
+    private static final String NATIVE_TLS = "smpp.tls";
+    private static final String NATIVE_STATE = "smpp.state";
+    private static final String NATIVE_STATE_LOCK = "smpp.stateLock";
+    private static final String NATIVE_REBIND_EXECUTOR = "smpp.rebindExecutor";
+    private static final String NATIVE_SESSION_USABLE = "smpp.sessionUsable";
+    private static final String NATIVE_SUBMITS_IN_FLIGHT = "smpp.submitsInFlight";
+    private static final String NATIVE_REBIND_ABANDONED = "smpp.rebindAbandoned";
+    private static final String NATIVE_OBSERVED_CONN = "smpp.observedConn";
+    private static final String NATIVE_SELF_CLOSED = "smpp.selfClosed";
+    private static final String NATIVE_LAST_INSTALL_NANOS = "smpp.lastInstallNanos";
+    private static final String NATIVE_CONSECUTIVE_FAILURES = "smpp.consecutiveFailures";
+
+    /**
+     * A session continuously bound for at least this long resets the consecutive-failure
+     * counter at its NEXT drop. Anchored at INSTALL (bind()'s critical section), never at
+     * attempt start: one connectAndBind stalled for bindTimeout (60s default) on the
+     * serialized rebind executor would otherwise look like a minute of stability and
+     * defeat the fix in exactly the flap-adjacent case it exists for. Measured
+     * install→drop-DETECTION, so the ~1s TRANSPORT_DEATH_GRACE_MS skew overstates
+     * uptime by ≤1.7% — immaterial, but this constant must stay an order of magnitude
+     * above the grace or the two start interacting. {@code System.nanoTime()}, not
+     * wall-clock: an NTP step across a 60s window would mis-measure. Internal on purpose,
+     * additive to expose later.
+     */
+    static final long STABLE_UPTIME_RESET_NANOS = TimeUnit.SECONDS.toNanos(60);
+
+    private static final java.util.logging.Logger LOGGER =
+            java.util.logging.Logger.getLogger(NativeListener.class.getName());
+
+    /**
+     * Wall-clock bound on jsmpp's close choreography during stop. jsmpp's
+     * {@code unbindAndClose()} has THREE unbounded segments — the {@code synchronized(os)}
+     * monitor acquisition behind a stalled writer, the untimed socket write itself (Java
+     * has no send timeout), and {@code close()}'s untimed {@code enquireLinkSender.join()}
+     * — and only one bounded segment, the 2s {@code unbind_resp} wait. If the whole
+     * choreography exceeds this bound, the watchdog force-closes the raw socket, which
+     * unwedges all three (see {@code closeSession}). DERIVED, not tuned: it must
+     * STRICTLY exceed {@code unbind()}'s response wait ({@code HOUSEKEEPING_TIMER_MS},
+     * the field value), or a healthy-but-slow SMSC races its own {@code unbind_resp}
+     * against the force-close. Healthy-path worst case ≈ 2s (unbind wait) + ~0.5s
+     * (sender join), so 2x leaves ~1.5s of scheduling headroom.
+     */
+    static final long CLOSE_WATCHDOG_MS = 2 * ConnectorSession.HOUSEKEEPING_TIMER_MS;
+
+    /**
+     * Extra jsmpp PDU-processor threads kept beyond {@code maxConcurrentDispatch} in SYNC
+     * mode, reserved so the SMSC's enquire_link keepalive is always answered even while
+     * every dispatch slot is busy. One suffices: the Dispatcher's semaphore caps blocking
+     * handlers at {@code maxConcurrentDispatch}, so this thread is never occupiable by one,
+     * and all outbound sends serialize on a single stream (a second reserve would protect
+     * nothing a stuck write doesn't already stall identically).
+     */
+    private static final int KEEPALIVE_RESERVE_THREADS = 1;
+
+    /**
+     * Fixed jsmpp PDU-processor pool size in ASYNC mode. Handlers run on virtual threads, so
+     * these platform threads only marshal each PDU and spawn - they never block, so a small
+     * pool is sufficient and one thread is always free for enquire_link regardless of load.
+     */
+    private static final int ASYNC_PDU_PROCESSOR_DEGREE = 3;
+
+    /**
+     * Listener lifecycle. One-way except {@code STARTING -> INIT} on a failed initial
+     * bind, which is safe because a failed bind installs nothing (no session, no
+     * executor, no in-flight work). {@code STOPPING}/{@code STOPPED} are terminal:
+     * restart is rejected — create a new Listener instead.
+     */
+    enum ListenerState { INIT, STARTING, STARTED, STOPPING, STOPPED }
+
+    // jsmpp's StringValidator rejects systemId/password/systemType at length 16/9/13
+    // respectively (StringParameter.SYSTEM_ID/PASSWORD/SYSTEM_TYPE - each C-Octet-String
+    // max includes the wire NUL terminator), so these are the largest usable lengths.
+    private static final int MAX_SYSTEM_ID_LENGTH = 15;
+    private static final int MAX_PASSWORD_LENGTH = 8;
+    private static final int MAX_SYSTEM_TYPE_LENGTH = 12;
+
+    private NativeListener() {}
+
+    /**
+     * jsmpp PDU-processor pool sizing. Extracted (SYNC degree must STRICTLY exceed
+     * maxConcurrentDispatch) because the reserve is load-bearing for more than keepalives:
+     * EVERY inbound PDU rides this pool - including {@code submit_sm_resp}. A SYNC
+     * handler blocked inside {@code Caller.submit} occupies one pool thread while its own
+     * completion depends on ANOTHER pool thread delivering the response; with no reserve,
+     * N blocked submitting handlers deadlock until transactionTimeout. The reserve is
+     * therefore a liveness requirement for the submit path, not just a keepalive nicety.
+     * KEEPALIVE_RESERVE_THREADS is compiler-inlined, so no automated mutation test is
+     * possible - the manual check is: set it to 0, run a concurrent-submit test, and
+     * expect N simultaneous TIMEOUT_DELIVERY_UNKNOWNs at transactionTimeout (a louder
+     * signature than the missed keepalive).
+     *
+     * <p><b>Upgrade canaries.</b> The degree computed here only takes effect through a
+     * jsmpp-PRIVATE listener: the pool is built {@code (1,1)} in {@code PDUReaderWorker}'s
+     * constructor and resized ONLY by jsmpp's own {@code BoundSessionStateListener} on the
+     * bound transition. There is no public accessor for the real pool size, so nothing
+     * can assert it directly - but a stuck single-threaded pool deadlocks every SYNC
+     * submit (the handler occupies the one thread while its own {@code submit_sm_resp}
+     * needs another), so integration tests exercising concurrent submits under load fail
+     * loudly if that resize ever stops happening. Do not weaken or delete such tests
+     * without replacing the coverage.
+     */
+    static int pduProcessorDegree(boolean async, int maxConcurrentDispatch) {
+        return async ? ASYNC_PDU_PROCESSOR_DEGREE
+                     : maxConcurrentDispatch + KEEPALIVE_RESERVE_THREADS;
+    }
+
+    public static Object initListener(Environment env, BObject listener, BMap<BString, Object> config,
+            Object tls) {
+        listener.addNativeData(NATIVE_CONFIG, config);
+        // The flat ResolvedTls record from types.bal (null = plaintext). Stored once at
+        // init like everything else; read on every bind attempt by newSession().
+        listener.addNativeData(NATIVE_TLS, tls);
+        int maxConcurrentDispatch = (int) ((Long) config.getIntValue(
+                StringUtils.fromString("maxConcurrentDispatch"))).longValue();
+        boolean decodeGsm7 = Boolean.TRUE.equals(config.get(StringUtils.fromString("decodeGsm7")));
+        // SESSION and REBIND_EXECUTOR are mutated after jsmpp threads exist, so they go
+        // through write-once AtomicReference holders installed here at init rather than
+        // via addNativeData post-init: the runtime's native-data map is a plain HashMap
+        // with unsynchronized get/put, and a post-init put racing a jsmpp-thread get would
+        // be a data race. All native-data writes now happen once, at init, single-threaded.
+        AtomicReference<ListenerState> stateRef = new AtomicReference<>(ListenerState.INIT);
+        AtomicReference<SMPPSession> sessionRef = new AtomicReference<>();
+        // The one smpp:Caller for this listener. It carries its OWN native data - the
+        // same two AtomicReferences the listener uses plus the config - handed over here,
+        // once, single-threaded, so NativeCaller never has to touch the listener BObject
+        // (whose native-data map has the same post-init-write race documented above).
+        BObject caller = ValueCreator.createObjectValue(ModuleUtils.getModule(), "Caller");
+        caller.addNativeData(NativeCaller.SESSION_REF, sessionRef);
+        caller.addNativeData(NativeCaller.STATE_REF, stateRef);
+        caller.addNativeData(NativeCaller.CONFIG, config);
+        // The connector's OWN drop verdict, readable by the submit path. getSessionState()
+        // cannot serve: a wedged session claims BOUND_TRX forever (the reader-death wedge),
+        // so without this flag submits would be accepted onto a dead socket for the whole
+        // rebind window. Set true at install, false on drop/stop.
+        AtomicBoolean sessionUsable = new AtomicBoolean(false);
+        caller.addNativeData(NativeCaller.SESSION_USABLE, sessionUsable);
+        listener.addNativeData(NATIVE_SESSION_USABLE, sessionUsable);
+        // Submits in flight, for the drain: gracefulStop must not unbind the session
+        // under a parked submit (owner decision: submits stay legal while STOPPING).
+        java.util.concurrent.atomic.AtomicInteger submitsInFlight =
+                new java.util.concurrent.atomic.AtomicInteger();
+        caller.addNativeData(NativeCaller.SUBMITS_IN_FLIGHT, submitsInFlight);
+        listener.addNativeData(NATIVE_SUBMITS_IN_FLIGHT, submitsInFlight);
+        // Terminal rebind verdict: set at the two give-up points (rebind disabled at drop
+        // time, or attempts exhausted), cleared only by a successful install. The submit
+        // path reads it to answer LINK_ABANDONED instead of LINK_DOWN - "retrying is
+        // futile for this Listener's life" is the one distinction error wording alone
+        // could not carry. Installed on BOTH objects at init: the Caller never touches the
+        // listener BObject (the native-data HashMap race documented above).
+        AtomicBoolean rebindAbandoned = new AtomicBoolean(false);
+        caller.addNativeData(NativeCaller.REBIND_ABANDONED, rebindAbandoned);
+        listener.addNativeData(NATIVE_REBIND_ABANDONED, rebindAbandoned);
+        // "This connector closed the session" marker: set by stop() and by the
+        // wedge-declaration reclaim, cleared at install. The submit path consults it in
+        // the response-timeout branch only, to remap a parked submit's masquerading
+        // TIMEOUT_DELIVERY_UNKNOWN into an honest LINK_DOWN.
+        AtomicBoolean selfClosed = new AtomicBoolean(false);
+        caller.addNativeData(NativeCaller.SELF_CLOSED, selfClosed);
+        listener.addNativeData(NATIVE_SELF_CLOSED, selfClosed);
+        // Rebind bookkeeping: the consecutive-failure counter and the stability anchor it
+        // resets against. Listener-only (the submit path never reads them); installed
+        // here so all native-data writes stay init-time (HashMap race above).
+        listener.addNativeData(NATIVE_LAST_INSTALL_NANOS,
+                new java.util.concurrent.atomic.AtomicLong());
+        listener.addNativeData(NATIVE_CONSECUTIVE_FAILURES,
+                new java.util.concurrent.atomic.AtomicInteger());
+        listener.addNativeData(NATIVE_DISPATCHER,
+                new Dispatcher(env.getRuntime(), maxConcurrentDispatch, decodeGsm7, caller));
+        listener.addNativeData(NATIVE_STATE, stateRef);
+        listener.addNativeData(NATIVE_STATE_LOCK, new Object());
+        listener.addNativeData(NATIVE_SESSION, sessionRef);
+        listener.addNativeData(NATIVE_REBIND_EXECUTOR, new AtomicReference<ScheduledExecutorService>());
+        // The INSTALLED session's observed connection, for the stop-path close watchdog.
+        // Set inside bind()'s critical section alongside NATIVE_SESSION; the per-attempt
+        // transport-death task deliberately does NOT read this shared holder (it
+        // closure-captures its own attempt's connection at schedule time - a rebind may
+        // have installed a successor by fire time).
+        listener.addNativeData(NATIVE_OBSERVED_CONN, new AtomicReference<ObservedConnection>());
+        env.getRuntime().registerListener(listener);
+        return null;
+    }
+
+    public static Object attach(BObject listener, BObject service, Object name) {
+        // Lifecycle gate. attach used to consult no state at all, so attaching to a
+        // STOPPED listener returned success: the service was stored, could never be
+        // dispatched to, and the listener could never be restarted - a silent, permanent
+        // no-op that looks healthy, and one a compiler plugin cannot catch. Rejects
+        // STOPPING/STOPPED ONLY: attach-while-STARTED is the legitimate hot-swap path, and
+        // Ballerina's own `service ... on listener` flow is attach-then-start from INIT.
+        // Read lock-free on purpose - taking stateLock here would add a new edge to the
+        // lock-order analysis for no benefit, and the only race is a concurrently-stopping
+        // listener, where rejecting is the right answer anyway.
+        ListenerState st = state(listener).get();
+        if (st == ListenerState.STOPPING || st == ListenerState.STOPPED) {
+            return ModuleUtils.createError("cannot attach: the listener is stopped "
+                    + "(a stopped listener cannot be restarted - create a new Listener)");
+        }
+        Dispatcher.AttachOutcome outcome = dispatcher(listener).attach(service);
+        return switch (outcome.result()) {
+            case ATTACHED -> null;
+            case ALREADY_ATTACHED -> ModuleUtils.createError(
+                    "cannot attach: a service is already attached to this listener; "
+                            + "detach it before attaching another");
+            case NO_REMOTE_METHODS -> ModuleUtils.createError(
+                    "attached service does not implement any of the supported remote methods "
+                            + "(onDeliverSm, onDataSm, onError)");
+            case BAD_SIGNATURE -> ModuleUtils.createError(
+                    "cannot attach: " + outcome.detail());
+        };
+    }
+
+    public static Object detach(BObject listener, BObject service) {
+        dispatcher(listener).detachIf(service);
+        return null;
+    }
+
+    public static Object start(BObject listener) {
+        AtomicReference<ListenerState> state = state(listener);
+        synchronized (stateLock(listener)) {
+            switch (state.get()) {
+                case STARTING, STARTED -> {
+                    return ModuleUtils.createError("cannot start: the listener is already started");
+                }
+                case STOPPING, STOPPED -> {
+                    return ModuleUtils.createError("cannot start: the listener has been stopped "
+                            + "and cannot be restarted; create a new Listener instead");
+                }
+                case INIT -> state.set(ListenerState.STARTING);
+            }
+        }
+        try {
+            if (!bind(listener, config(listener))) {
+                // A concurrent stop won the race while we were binding; bind() already
+                // closed the fresh session and the stop path owns the state from here.
+                return ModuleUtils.createError("the listener was stopped before start() completed");
+            }
+            return null;
+        } catch (Exception e) {
+            synchronized (stateLock(listener)) {
+                if (state.get() == ListenerState.STARTING) {
+                    // Nothing was installed - a failed start is retryable (see ListenerState doc).
+                    state.set(ListenerState.INIT);
+                }
+                // else: a concurrent stop moved us to STOPPING/STOPPED; leave its transition alone.
+            }
+            return ModuleUtils.createError("failed to connect/bind to SMSC: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Connects and binds to the SMSC, (re)configures the dispatcher, and installs the new
+     * session - but only if the lifecycle still wants it by the time the blocking
+     * connectAndBind returns. The state lock is deliberately NOT held across
+     * connectAndBind (it can block for the full network bind timeout; holding the lock
+     * would freeze gracefulStop/immediateStop for that long).
+     *
+     * @return {@code true} if the session was installed; {@code false} if a concurrent
+     *     stop aborted the install (the fresh session is closed before returning)
+     * @throws Exception if the connect/bind itself fails
+     */
+    private static boolean bind(BObject listener, BMap<BString, Object> config) throws Exception {
+        Dispatcher dispatcher = dispatcher(listener);
+        // Bounds both the TCP connect (via the connection factory) and the bind-response
+        // wait (via connectAndBind below), on the initial start and every rebind alike.
+        int bindTimeoutMillis = (int) (decimalValue(config, "bindTimeout") * 1000);
+        // Armed further down, once the per-attempt drop guards exist; connections created
+        // before arming (i.e. during connectAndBind's connect phase) report nothing, and
+        // connect/bind-phase failures are surfaced by connectAndBind itself.
+        AtomicReference<Runnable> onTransportDeath = new AtomicReference<>();
+        // THIS attempt's observed connection, filled by the factory lambda during
+        // connectAndBind. Per-attempt on purpose: the transport-death task and the
+        // wedge-declaration force-close must act on the connection of the attempt that
+        // armed them, never on whatever a later rebind installed.
+        AtomicReference<ObservedConnection> attemptConn = new AtomicReference<>();
+        SMPPSession session = newSession(listener, bindTimeoutMillis, onTransportDeath,
+                attemptConn, (long) (decimalValue(config, "transactionTimeout") * 1000));
+        session.setMessageReceiverListener(dispatcher);
+
+        String host = str(config, "host");
+        int port = (int) ((Long) config.getIntValue(StringUtils.fromString("port"))).longValue();
+        String systemId = str(config, "systemId");
+        String password = str(config, "password");
+        String systemType = str(config, "systemType");
+        validateCredentials(systemId, password, systemType);
+        BindType bindType = toBindType(str(config, "bindType"));
+        int maxConcurrentDispatch = (int) ((Long) config.getIntValue(
+                StringUtils.fromString("maxConcurrentDispatch"))).longValue();
+        boolean async = "ASYNC".equals(str(config, "responseMode"));
+        dispatcher.setAsync(async);
+        // pduProcessorDegree sizes jsmpp's shared PDU-processor pool, which handles ALL
+        // inbound PDUs including the SMSC's enquire_link keepalive. Actual handler
+        // concurrency is bounded by the Dispatcher's Semaphore(maxConcurrentDispatch), not
+        // by this pool size. Must be set while the session is still CLOSED (before
+        // connectAndBind). Sizing is mode-aware:
+        //  - SYNC: handlers run ON these pool threads and block for the handler's duration,
+        //    so the pool must be maxConcurrentDispatch + a reserve. The reserve (never
+        //    occupiable by a blocking handler, since the Semaphore caps that at
+        //    maxConcurrentDispatch) guarantees a thread is always free to answer
+        //    enquire_link - the fix for the self-inflicted drop. Reserve of 1 suffices: all
+        //    outbound sends serialize on one stream, so a second reserve protects nothing.
+        //  - ASYNC: handlers run on virtual threads, so pool threads only marshal each PDU
+        //    and spawn - they never block. A small fixed pool is plenty and avoids spinning
+        //    maxConcurrentDispatch *platform* threads that would only spawn vthreads.
+        int pduProcessorDegree = pduProcessorDegree(async, maxConcurrentDispatch);
+        session.setPduProcessorDegree(pduProcessorDegree);
+
+        // Connector's own keepalive/idle-probe interval and socket read timeout (seconds ->
+        // millis). enquireLinkInterval is validated >= 5s, so it never disables detection.
+        session.setEnquireLinkTimer((int) (decimalValue(config, "enquireLinkInterval") * 1000));
+
+        // transactionTimeout is applied at session construction (ConnectorSession), split
+        // by role: submits get the configured value, jsmpp housekeeping stays at the short
+        // internal bound. Deliberately NOT set via setTransactionTimer here - that would
+        // overwrite the field carrying the housekeeping bound (unbind() reads the field).
+
+        // Per-attempt flags. `installed` gates the listener lambda: a CLOSED fired by a
+        // rejected/failed bind (jsmpp self-closes inside connectAndBind) is start()'s
+        // error, not an "unexpected drop". `dropReported` makes drop-reporting
+        // exactly-once between the lambda and the manual post-install check below -
+        // jsmpp swaps its state BEFORE running listeners (SMPPSessionContext.changeState),
+        // so neither side can assume the other has or hasn't run yet.
+        AtomicBoolean installed = new AtomicBoolean(false);
+        AtomicBoolean dropReported = new AtomicBoolean(false);
+        // Second, independent drop signal (see ObservedConnection): fires the moment
+        // jsmpp's reader observes EOF/IOException on the socket. Shares the same
+        // per-attempt guards as the state listener below, so whichever signal arrives
+        // first reports the drop exactly once. The grace delay gives jsmpp's own CLOSED
+        // notification - the normal path, measured at 0-4ms after EOF when the close
+        // choreography works - every reasonable chance to win; this path only acts when
+        // that choreography wedges (the reader-death failure mode).
+        onTransportDeath.set(() -> scheduleTransportDeathCheck(listener, installed, dropReported,
+                attemptConn, session));
+        session.addSessionStateListener((newState, oldState, source) -> {
+            if (newState != SessionState.CLOSED || !installed.get()) {
+                return;
+            }
+            ListenerState st = state(listener).get();
+            if (st == ListenerState.STOPPING || st == ListenerState.STOPPED) {
+                return; // user-initiated close; never a drop
+            }
+            if (dropReported.compareAndSet(false, true)) {
+                onUnexpectedDrop(listener,
+                        "SMPP session closed unexpectedly (was " + oldState + ")");
+            }
+        });
+
+        // addressRange stays null, deliberately. jsmpp's connectAndBind has exactly one
+        // failure branch that does NOT close the socket - the PDUException catch
+        // (SMPPSession.java:284-286) rethrows as IOException while leaving the socket
+        // open and the started PDUReaderWorker running (per-attempt FD + thread leak).
+        // validateCredentials makes that branch unreachable for systemId/password/
+        // systemType; a non-null addressRange would reopen it.
+        session.connectAndBind(host, port, bindType, systemId, password, systemType,
+                TypeOfNumber.UNKNOWN, NumberingPlanIndicator.UNKNOWN, null, bindTimeoutMillis);
+
+        // LOAD-BEARING CROSS-LIBRARY INVARIANT: this critical section holds stateLock and
+        // reads session.getSessionState(), while the state-listener lambda above acquires
+        // stateLock from a jsmpp thread. TWO jsmpp locks are involved:
+        //
+        //  1. stateProcessorLock - released BEFORE fireStateChanged
+        //     (SMPPSessionContext.changeState), so the lambda's stateLock acquisition
+        //     never happens while a jsmpp thread holds its WRITE lock. True, but not
+        //     what makes this safe.
+        //  2. the AbstractSessionContext OBJECT MONITOR - open()/bound()/unbound()/
+        //     close() are all `synchronized`, and fireStateChanged runs INSIDE it. So a
+        //     jsmpp thread firing CLOSED holds that monitor and then wants stateLock.
+        //
+        // Deadlock freedom therefore rests on the fact that getSessionState() takes only
+        // stateProcessorLock's READ lock and NEVER the context object monitor: this
+        // thread holds stateLock and wants the read lock; the firing thread holds the
+        // monitor and wants stateLock; no cycle. If a future jsmpp made getSessionState()
+        // synchronized (a plausible fix for the unsynchronized stateProcessor read in
+        // changeState), this becomes an immediate hard deadlock between a Ballerina
+        // strand and a jsmpp reader thread. Re-verify BOTH facts on upgrade.
+        //
+        // The same reasoning is why no connector code may hold stateLock across ANY
+        // jsmpp Session/SessionContext call except getSessionState() - notably why the
+        // close watchdog force-closes the raw socket rather than calling session.close(),
+        // and why unbindAndClose()/closeSession() run outside this monitor.
+        boolean abortedByStop = false;
+        synchronized (stateLock(listener)) {
+            ListenerState st = state(listener).get();
+            // STARTING: the initial start(). STARTED: a rebind attempt (the lifecycle
+            // stays STARTED across a drop; only sessions come and go).
+            if (st == ListenerState.STARTING || st == ListenerState.STARTED) {
+                session(listener).set(session);
+                observedConn(listener).set(attemptConn.get());
+                sessionUsable(listener).set(true);
+                rebindAbandoned(listener).set(false);
+                selfClosed(listener).set(false);
+                // The stability anchor: install time, under this same monitor the drop
+                // path evaluates it under. Deliberately NOT a counter reset - resetting
+                // on install is exactly the flap bug; only a drop that finds
+                // >=STABLE_UPTIME_RESET_NANOS of uptime resets.
+                lastInstallNanos(listener).set(System.nanoTime());
+                installed.set(true);
+                state(listener).set(ListenerState.STARTED);
+                // Bound-race check: if the session died in the sliver between
+                // connectAndBind returning and installed.set(true), the lambda saw
+                // installed == false and stayed silent - detect and report it here.
+                // The CAS keeps this exactly-once against a lambda that DID see
+                // installed == true. (Reentrant: onUnexpectedDrop -> scheduleRebind
+                // re-acquires this same monitor.)
+                if (session.getSessionState() == SessionState.CLOSED
+                        && dropReported.compareAndSet(false, true)) {
+                    onUnexpectedDrop(listener,
+                            "SMPP session closed unexpectedly immediately after binding");
+                }
+            } else {
+                abortedByStop = true;
+            }
+        }
+        if (abortedByStop) {
+            // Outside the lock: this does network I/O.
+            session.unbindAndClose();
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * Rejects an oversized {@code systemId}/{@code password}/{@code systemType} before
+     * {@link #bind} ever calls {@code connectAndBind}. jsmpp's own {@code StringValidator}
+     * would catch the same violation, but its exception message embeds the raw (invalid)
+     * value verbatim - a credential-leak path via logs/error messages. The message here
+     * names the field and its limit but never echoes the value.
+     *
+     * @throws IllegalArgumentException if any of the three exceeds its limit
+     */
+    // package-private (not private): exercised directly by unit tests, a pure-logic JUnit
+    // suite that needs no jsmpp session or Ballerina runtime.
+    static void validateCredentials(String systemId, String password, String systemType) {
+        // ASCII first, then length. jsmpp counts these fields in UTF-16 code units but
+        // writes them with String.getBytes() in the JVM default charset (PDUByteBuffer),
+        // so a single non-ASCII character silently overflows the C-octet field on the
+        // wire - and the bind failure would surface as a bare "failed to connect/bind"
+        // with no hint. ASCII-only makes the length checks exact. Message names the field
+        // and index, never the value - it's a credential.
+        requireAscii("systemId", systemId);
+        requireAscii("password", password);
+        requireAscii("systemType", systemType);
+        if (systemId.length() > MAX_SYSTEM_ID_LENGTH) {
+            throw new IllegalArgumentException(
+                    "systemId exceeds the maximum length of " + MAX_SYSTEM_ID_LENGTH + " characters");
+        }
+        if (password.length() > MAX_PASSWORD_LENGTH) {
+            throw new IllegalArgumentException(
+                    "password exceeds the maximum length of " + MAX_PASSWORD_LENGTH + " characters");
+        }
+        if (systemType.length() > MAX_SYSTEM_TYPE_LENGTH) {
+            throw new IllegalArgumentException(
+                    "systemType exceeds the maximum length of " + MAX_SYSTEM_TYPE_LENGTH + " characters");
+        }
+    }
+
+    private static void requireAscii(String field, String value) {
+        for (int i = 0; i < value.length(); i++) {
+            if (value.charAt(i) > 0x7F) {
+                throw new IllegalArgumentException(field + " contains a non-ASCII character at index "
+                        + i + "; SMPP C-octet fields must be ASCII");
+            }
+        }
+    }
+
+    private static void onUnexpectedDrop(BObject listener, String description) {
+        // Before anything else: flip the connector's own drop verdict so the submit
+        // path fails fast with LINK_DOWN instead of stalling transactionTimeout against
+        // a dead (or wedged, still-claiming-BOUND) session.
+        sessionUsable(listener).set(false);
+        dispatcher(listener).dispatchError(description);
+        // The attempt counter is CONSECUTIVE-FAILURE based, reset only by a stability
+        // window - never by a successful bind alone. Hardcoding attempt=1 would reset
+        // the episode on every bind-then-drop flap: against an SMSC that accepts the
+        // bind and then kicks the session, maxRebindAttempts would never exhaust and
+        // backOffMultiplier's exponent would stay 0 forever - both knobs inert against
+        // exactly the flap an operator most needs them for. Runs once per drop: only
+        // dropReported-CAS winners reach here.
+        int attempt;
+        synchronized (stateLock(listener)) {
+            long installedAt = lastInstallNanos(listener).getAndSet(0);
+            java.util.concurrent.atomic.AtomicInteger failures = consecutiveFailures(listener);
+            if (installedAt != 0
+                    && System.nanoTime() - installedAt >= STABLE_UPTIME_RESET_NANOS) {
+                // The session proved stable before this drop: a fresh failure episode.
+                failures.set(0);
+            }
+            attempt = failures.incrementAndGet();
+        }
+        scheduleRebind(listener, attempt);
+    }
+
+    private static AtomicBoolean sessionUsable(BObject listener) {
+        return (AtomicBoolean) listener.getNativeData(NATIVE_SESSION_USABLE);
+    }
+
+    private static AtomicBoolean rebindAbandoned(BObject listener) {
+        return (AtomicBoolean) listener.getNativeData(NATIVE_REBIND_ABANDONED);
+    }
+
+    private static AtomicBoolean selfClosed(BObject listener) {
+        return (AtomicBoolean) listener.getNativeData(NATIVE_SELF_CLOSED);
+    }
+
+    private static java.util.concurrent.atomic.AtomicLong lastInstallNanos(BObject listener) {
+        return (java.util.concurrent.atomic.AtomicLong) listener.getNativeData(NATIVE_LAST_INSTALL_NANOS);
+    }
+
+    private static java.util.concurrent.atomic.AtomicInteger consecutiveFailures(BObject listener) {
+        return (java.util.concurrent.atomic.AtomicInteger) listener.getNativeData(NATIVE_CONSECUTIVE_FAILURES);
+    }
+
+    private static java.util.concurrent.atomic.AtomicInteger submitsInFlight(BObject listener) {
+        return (java.util.concurrent.atomic.AtomicInteger) listener.getNativeData(NATIVE_SUBMITS_IN_FLIGHT);
+    }
+
+    /**
+     * How long the transport-death signal waits for jsmpp's own CLOSED notification
+     * before declaring the drop itself. When jsmpp's close choreography works it fires
+     * CLOSED 0-4ms after the EOF, so 1s is ~250x headroom for the normal path while still
+     * recovering a wedged session ~10x faster than the tightest test budget (10s).
+     */
+    private static final long TRANSPORT_DEATH_GRACE_MS = 1000;
+
+    /**
+     * Invoked (via {@link ObservedConnection}) on jsmpp's reader thread the moment the
+     * transport dies. Schedules a delayed check rather than acting inline: the normal
+     * path is that jsmpp's CLOSED listener fires within milliseconds and wins the
+     * {@code dropReported} CAS, making the check a no-op. Only when the reader thread
+     * dies mid-{@code close()} - leaving the session BOUND forever and the CLOSED
+     * listener unfired (the wedge documented on {@link ObservedConnection}) - does this
+     * path report the drop and drive the rebind.
+     *
+     * <p>A declared wedge is no longer merely abandoned: the task force-closes the
+     * attempt's raw socket — which unwedges the writer-jam variant of the wedge entirely
+     * (the stalled writer throws, releases the {@code os} monitor, the pending interrupt
+     * drains the EnquireLinkSender, {@code close()}'s join returns, CLOSED fires onto an
+     * already-won CAS) — and then hands the session to a throwaway daemon closer thread
+     * that runs jsmpp's own {@code close()}, reclaiming the orphaned EnquireLinkSender
+     * (its 500ms wait IS interruptible) and driving the state to CLOSED so
+     * {@code SMPPSession.finalize()} becomes a permanent no-op. The closer runs on its
+     * own thread because {@code close()} can still park in the untimed {@code join()} at
+     * worst — a daemon thread the connector is willing to lose, never the rebind executor
+     * (which the next rebind needs) and never joined. What CANNOT be reclaimed
+     * connector-side: a reader thread that died before {@code pduExecutor.shutdown()}
+     * leaves that pool's idle core threads alive forever (the pool is private to jsmpp) —
+     * a bounded, now-logged leak of {@code maxConcurrentDispatch+1} idle threads per
+     * reader-death wedge, recorded in the known-limitations table.
+     */
+    private static void scheduleTransportDeathCheck(BObject listener, AtomicBoolean installed,
+            AtomicBoolean dropReported, AtomicReference<ObservedConnection> attemptConn,
+            SMPPSession session) {
+        synchronized (stateLock(listener)) {
+            ListenerState st = state(listener).get();
+            if (st != ListenerState.STARTING && st != ListenerState.STARTED) {
+                return; // stopping/stopped: user-initiated teardown closes sockets too
+            }
+            // Captured NOW, not at fire time: by the time the task runs, a rebind may
+            // have installed a successor session/connection, and acting on the shared
+            // holder would force-close the WRONG (healthy) transport. The per-attempt
+            // dropReported CAS already makes a stale task a no-op; this capture is the
+            // defense-in-depth that keeps even a misfire harmless.
+            ObservedConnection conn = attemptConn.get();
+            try {
+                rebindExecutor(listener).schedule(() -> {
+                    if (state(listener).get() != ListenerState.STARTED || !installed.get()) {
+                        // Bind-phase death (connectAndBind surfaces it to start()/rebind)
+                        // or a stop won the race - either way, not ours to report.
+                        return;
+                    }
+                    if (dropReported.compareAndSet(false, true)) {
+                        onUnexpectedDrop(listener,
+                                "SMPP transport died and jsmpp's CLOSED notification did not arrive within "
+                                        + TRANSPORT_DEATH_GRACE_MS + "ms (reader-death wedge; reclaiming the session)");
+                        // AFTER the CAS is won, so the CLOSED this triggers lands on a
+                        // no-op CAS. Order matters: force-close the raw socket FIRST
+                        // (unblocks any os-monitor holder; takes no lock, runs fine on
+                        // this rebind-executor thread, outside the monitor), THEN
+                        // close() on a throwaway daemon thread (can park in jsmpp's
+                        // untimed join at worst - a thread we are willing to lose).
+                        // Same marker as stop(): a submit parked on THIS dying session
+                        // reports "connector closed it", not an SMSC timeout. A racing
+                        // rebind that installs a fresh session clears it again - and a
+                        // submit that lands on the fresh session never times out on
+                        // this one, so the clear cannot mislabel anything.
+                        selfClosed(listener).set(true);
+                        if (conn != null) {
+                            conn.forceClose();
+                        }
+                        Thread closer = new Thread(() -> {
+                            try {
+                                session.close();
+                            } catch (Throwable t) {
+                                LOGGER.warning("background close of abandoned SMPP session threw: " + t);
+                            }
+                        }, "smpp-abandoned-session-closer");
+                        closer.setDaemon(true);
+                        closer.start();
+                    }
+                }, TRANSPORT_DEATH_GRACE_MS, TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.RejectedExecutionException e) {
+                // A stop shut the executor down between the state check and schedule();
+                // stops own their teardown, nothing to report.
+            }
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void scheduleRebind(BObject listener, int attempt) {
+        BMap<BString, Object> policy =
+                (BMap<BString, Object>) config(listener).getMapValue(StringUtils.fromString("rebindPolicy"));
+        long maxAttempts = policy.getIntValue(StringUtils.fromString("maxRebindAttempts"));
+        if (maxAttempts == 0) {
+            // Auto-rebind disabled; the onUnexpectedDrop call already reported the drop.
+            // Latch the terminal verdict BEFORE returning so a submit racing in from the
+            // very onError handler that learns of the drop already sees LINK_ABANDONED.
+            rebindAbandoned(listener).set(true);
+            LOGGER.warning("SMPP link is down and rebindPolicy.maxRebindAttempts is 0: this "
+                    + "listener will not recover; submits now fail with LINK_ABANDONED");
+            return;
+        }
+        if (maxAttempts > 0 && attempt > maxAttempts) {
+            rebindAbandoned(listener).set(true);
+            // The one operator-visible WARN at the transition: the dispatchError below
+            // reaches only an attached onError handler, which a default deployment may
+            // not have.
+            LOGGER.warning("SMPP listener gave up rebinding after " + (attempt - 1)
+                    + " attempt(s): this listener will not recover; submits now fail with "
+                    + "LINK_ABANDONED");
+            dispatcher(listener).dispatchError(
+                    "gave up rebinding to the SMSC after " + (attempt - 1) + " attempt(s)");
+            return;
+        }
+        double initialDelay = decimalValue(policy, "initialRebindDelay");
+        double maxDelay = decimalValue(policy, "maxRebindDelay");
+        double multiplier = decimalValue(policy, "backOffMultiplier");
+        double delaySeconds = Math.min(initialDelay * Math.pow(multiplier, attempt - 1), maxDelay);
+
+        synchronized (stateLock(listener)) {
+            if (state(listener).get() != ListenerState.STARTED) {
+                // A stop won: its STOPPING transition happened under this same monitor,
+                // so there is no window between this check and .schedule() below - and
+                // stop only shuts the executor down AFTER making that transition, so
+                // RejectedExecutionException is structurally unreachable here.
+                return;
+            }
+            rebindExecutor(listener).schedule(() -> {
+                try {
+                    attemptRebind(listener, attempt);
+                } catch (Throwable t) {
+                    // Belt-and-suspenders: anything a task throws inside .schedule() is
+                    // swallowed into a never-read ScheduledFuture by the JDK. If a future
+                    // refactor breaks attemptRebind's own handling, surface it via
+                    // onError instead of silently killing the rebind loop.
+                    dispatcher(listener).dispatchError(
+                            "rebind attempt " + attempt + " crashed unexpectedly: " + t);
+                }
+            }, (long) (delaySeconds * 1000), TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private static void attemptRebind(BObject listener, int attempt) {
+        if (state(listener).get() != ListenerState.STARTED) {
+            return; // stopped while this attempt sat in the executor queue
+        }
+        try {
+            // Returns false if a stop raced in mid-bind; bind() already closed the new
+            // session and the stop path owns everything from here - nothing to report.
+            bind(listener, config(listener));
+        } catch (Exception e) {
+            ListenerState st = state(listener).get();
+            if (st == ListenerState.STOPPING || st == ListenerState.STOPPED) {
+                // shutdownNow() interrupting an in-flight connect lands here; the failure
+                // was caused by (or is moot because of) the stop - don't report it.
+                return;
+            }
+            dispatcher(listener).dispatchError("rebind attempt " + attempt + " failed: " + e.getMessage());
+            // Same counter the drop path uses: a failed BIND and a bind-then-drop flap
+            // are one consecutive-failure sequence, so exhaustion and backoff see both.
+            // The increment keeps the counter in lockstep with `attempt + 1`.
+            scheduleRebind(listener, consecutiveFailures(listener).incrementAndGet());
+        }
+    }
+
+    public static Object gracefulStop(Environment env, BObject listener) {
+        return stop(env, listener, true);
+    }
+
+    public static Object immediateStop(Environment env, BObject listener) {
+        return stop(env, listener, false);
+    }
+
+    private static Object stop(Environment env, BObject listener, boolean graceful) {
+        AtomicReference<ListenerState> state = state(listener);
+        synchronized (stateLock(listener)) {
+            ListenerState st = state.get();
+            if (st == ListenerState.STOPPING || st == ListenerState.STOPPED) {
+                return null; // stop is idempotent; a concurrent second stop returns immediately
+            }
+            // From INIT (never started), STARTING (stop races the initial bind - the
+            // binder will see this and discard its fresh session), or STARTED.
+            state.set(ListenerState.STOPPING);
+            // A rebind task already queued must not evaluate stability against a stale
+            // install once the stop owns teardown.
+            lastInstallNanos(listener).set(0);
+        }
+        shutdownRebindExecutor(listener);   // no-op if never created
+        if (graceful) {
+            // Submits stay LEGAL during the drain (owner decision): the session is bound
+            // and usable until closeSession below, and rejecting submits from the very
+            // handlers being drained would drop every reply-style service's replies on
+            // shutdown. The drain covers both dispatches and in-flight submits.
+            awaitDrain(listener);           // also covers in-flight onError notifications
+        }
+        // Point of no return for the send path: fail-fast any submit arriving after the
+        // drain, then unbind. The flip stays OUTSIDE if(graceful) - both stop flavours
+        // depend on it, and the whole increment-before-check reservation argument on the
+        // submit side is ordered against it.
+        sessionUsable(listener).set(false);
+        // BEFORE closeSession: a submit parked awaiting its response when the close
+        // lands must observe this at failure time and report LINK_DOWN, not a
+        // masquerading SMSC timeout.
+        selfClosed(listener).set(true);
+        if (graceful) {
+            // Post-flip sweep: a submit that incremented before the flip may still be in
+            // flight; with increment-before-check on the submit side, this bounded wait
+            // closes the reservation race - post-flip submits fail fast and decrement in
+            // microseconds, so the sweep only ever waits for real sends. GRACEFUL ONLY:
+            // immediateStop's documented contract is to close the socket under an
+            // in-flight submit, and the sweep sitting outside this if() was exactly the
+            // unrecorded 2s wait that made published latency claims false. Note this
+            // runs even at gracefulStopTimeout=0: the sweep is reservation-race
+            // CORRECTNESS, only the drain above is grace.
+            java.util.concurrent.atomic.AtomicInteger sweep = submitsInFlight(listener);
+            long sweepDeadline = System.currentTimeMillis() + 2000;
+            while (sweep.get() > 0 && System.currentTimeMillis() < sweepDeadline) {
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+            }
+        }
+        Object result = closeSession(listener);  // null-safe; outside the lock (network I/O)
+        synchronized (stateLock(listener)) {
+            state.set(ListenerState.STOPPED);
+        }
+        // Exactly-once: only the thread that made the STOPPING transition reaches here.
+        // Deregister even if closeSession errored - the listener is terminal either way.
+        env.getRuntime().deregisterListener(listener);
+        return result;
+    }
+
+    /** Waits (bounded by {@code ListenerConfig.gracefulStopTimeout}) for in-flight dispatches to finish. */
+    private static void awaitDrain(BObject listener) {
+        double timeoutSeconds = decimalValue(config(listener), "gracefulStopTimeout");
+        long deadline = System.currentTimeMillis() + (long) (timeoutSeconds * 1000);
+        Dispatcher dispatcher = dispatcher(listener);
+        // Two counters: dispatches (handlers + onError vthreads) AND submits. Submits are
+        // tracked separately because they can be issued from NON-handler strands (a
+        // stashed Caller), which inFlight cannot see - without this, stop() could unbind
+        // the session under a parked submit. Submits stay legal while STOPPING (owner
+        // decision), so the drain must cover them.
+        java.util.concurrent.atomic.AtomicInteger submits = submitsInFlight(listener);
+        while ((dispatcher.inFlightCount() > 0 || submits.get() > 0)
+                && System.currentTimeMillis() < deadline) {
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        // Say WHICH counter stalled. A silent drain that burns its whole timeout and
+        // proceeds is indistinguishable from an instant one in the logs. One line at
+        // the timeout is the whole fix, and the counts separate the two very different
+        // causes: a wedged handler (inFlight) vs a submit parked awaiting a response the
+        // SMSC never sent (submitsInFlight).
+        int stalledDispatches = dispatcher.inFlightCount();
+        int stalledSubmits = submits.get();
+        if (stalledDispatches > 0 || stalledSubmits > 0) {
+            LOGGER.warning("gracefulStop drain timed out after " + timeoutSeconds
+                    + "s with " + stalledDispatches + " dispatch(es) and " + stalledSubmits
+                    + " submit(s) still in flight; unbinding anyway. In-flight submits are "
+                    + "not woken by the close and will fail at transactionTimeout.");
+        }
+    }
+
+    /**
+     * Unbinds and closes the installed session, bounded by the {@code CLOSE_WATCHDOG_MS}
+     * watchdog: jsmpp's {@code unbindAndClose()} has three unbounded segments (see
+     * {@code CLOSE_WATCHDOG_MS}) and on a wedged session {@code isBound()} is still true,
+     * so the wedge path is precisely the path that DOES attempt an unbind on a dead
+     * socket. The watchdog is a dedicated daemon thread - never the rebind executor
+     * (single-threaded and possibly the very thread that is stalled), never a virtual
+     * thread (ASYNC+submit can pin the carrier pool, and a watchdog schedulable only on a
+     * resource the pathology exhausts is not a watchdog) - armed HERE, after the drain
+     * and sweep (a graceful drain longer than the bound must not be force-closed
+     * mid-drain), fire-and-forget, never joined (on TLS a close can itself block; the
+     * thread is disposable). It touches ONLY the raw transport: no connector lock, no
+     * jsmpp Session/SessionContext method. Calling session.close() from a drop path
+     * instead would be a deadlock (stateLock -> context monitor inversion against the
+     * reader) - do not "simplify" to that.
+     *
+     * <p>Why one raw {@code Socket.close()} suffices to unwedge all three segments:
+     * the stalled writer throws and RELEASES the {@code os} monitor; the
+     * EnquireLinkSender acquires it, fails its write (logged-and-continued for
+     * enquire_link), and its {@code waitDone} sees the interrupt {@code close()} already
+     * delivered before parking in {@code join()} - so the sender's run loop exits, the
+     * join returns, and {@code ctx.close()} fires CLOSED (suppressed: state is STOPPING).
+     * The watchdog never interrupts anything itself; jsmpp's own pending interrupt is
+     * what completes the choreography.
+     */
+    private static Object closeSession(BObject listener) {
+        SMPPSession session = session(listener).get();
+        if (session == null) {
+            return null;
+        }
+        ObservedConnection conn = observedConn(listener).get();
+        Thread watchdog = null;
+        if (conn != null) {
+            Thread w = new Thread(() -> {
+                try {
+                    Thread.sleep(CLOSE_WATCHDOG_MS);
+                } catch (InterruptedException e) {
+                    return; // unbindAndClose completed in time; nothing to break
+                }
+                conn.forceClose();
+            }, "smpp-close-watchdog");
+            w.setDaemon(true);
+            w.start();
+            watchdog = w;
+        }
+        try {
+            session.unbindAndClose();
+        } catch (Exception e) {
+            return ModuleUtils.createError("failed to unbind SMSC session: " + e.getMessage());
+        } finally {
+            if (watchdog != null) {
+                watchdog.interrupt();
+            }
+        }
+        return null;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AtomicReference<ObservedConnection> observedConn(BObject listener) {
+        return (AtomicReference<ObservedConnection>) listener.getNativeData(NATIVE_OBSERVED_CONN);
+    }
+
+    private static Dispatcher dispatcher(BObject listener) {
+        return (Dispatcher) listener.getNativeData(NATIVE_DISPATCHER);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static BMap<BString, Object> config(BObject listener) {
+        return (BMap<BString, Object>) listener.getNativeData(NATIVE_CONFIG);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AtomicReference<ListenerState> state(BObject listener) {
+        return (AtomicReference<ListenerState>) listener.getNativeData(NATIVE_STATE);
+    }
+
+    private static Object stateLock(BObject listener) {
+        return listener.getNativeData(NATIVE_STATE_LOCK);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AtomicReference<SMPPSession> session(BObject listener) {
+        return (AtomicReference<SMPPSession>) listener.getNativeData(NATIVE_SESSION);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static AtomicReference<ScheduledExecutorService> rebindExecutorRef(BObject listener) {
+        return (AtomicReference<ScheduledExecutorService>) listener.getNativeData(NATIVE_REBIND_EXECUTOR);
+    }
+
+    /**
+     * Must be called while holding {@code stateLock(listener)} — callers are
+     * {@code scheduleRebind} and {@code scheduleTransportDeathCheck}.
+     */
+    private static ScheduledExecutorService rebindExecutor(BObject listener) {
+        AtomicReference<ScheduledExecutorService> ref = rebindExecutorRef(listener);
+        ScheduledExecutorService existing = ref.get();
+        if (existing != null) {
+            return existing;
+        }
+        ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+        ref.set(executor);
+        return executor;
+    }
+
+    private static void shutdownRebindExecutor(BObject listener) {
+        ScheduledExecutorService existing = rebindExecutorRef(listener).get();
+        if (existing != null) {
+            existing.shutdownNow();
+        }
+    }
+
+    /**
+     * A fresh session per bind attempt. Plaintext uses a connect-timeout-bounded factory
+     * (jsmpp's stock plaintext connect is unbounded); TLS builds a fresh per-attempt factory
+     * with the same connect bound. Called once per bind attempt (initial start and every
+     * rebind), so no factory/SSLContext is shared across attempts - and rotated TLS trust
+     * material is picked up on the next rebind for free. {@code connectTimeoutMillis} bounds
+     * the TCP connect (and, for TLS, the handshake read); the bind-response wait is bounded
+     * separately by the timeout passed to {@code connectAndBind}.
+     */
+    @SuppressWarnings("unchecked")
+    private static SMPPSession newSession(BObject listener, int connectTimeoutMillis,
+            AtomicReference<Runnable> onTransportDeath,
+            AtomicReference<ObservedConnection> attemptConn, long submitTransactionTimerMs)
+            throws Exception {
+        Object tls = listener.getNativeData(NATIVE_TLS);
+        RawConnectionFactory delegate = tls == null
+                ? new SmppPlainConnectionFactory(connectTimeoutMillis)
+                : buildSslFactory((BMap<BString, Object>) tls, connectTimeoutMillis);
+        // Every connection this session ever opens is observed - the connector's own
+        // transport-death signal, independent of jsmpp's CLOSED listener. See
+        // ObservedConnection for the reader-death wedge this guards against and for the
+        // raw-socket force-close primitive. The session itself is a ConnectorSession:
+        // submits wait the configured transactionTimeout, jsmpp's housekeeping (unbind,
+        // enquire-link probes, reader exit) is bounded at
+        // ConnectorSession.HOUSEKEEPING_TIMER_MS - see that class for the split.
+        return new ConnectorSession((host, port) -> {
+            RawConnectionFactory.RawConnection raw = delegate.createRawConnection(host, port);
+            ObservedConnection observed =
+                    new ObservedConnection(raw.connection(), raw.rawSocket(), onTransportDeath);
+            attemptConn.set(observed);
+            return observed;
+        }, submitTransactionTimerMs);
+    }
+
+    /** Field names here mirror types.bal's internal ResolvedTls record exactly. */
+    private static SmppSslConnectionFactory buildSslFactory(BMap<BString, Object> tls,
+            int connectTimeoutMillis) throws Exception {
+        return SmppSslConnectionFactory.create(
+                tlsStr(tls, "trustStorePath"),
+                tlsStr(tls, "trustStorePassword").toCharArray(),
+                tlsStr(tls, "trustCertPath"),
+                tlsStr(tls, "keyStorePath"),
+                tlsStr(tls, "keyStorePassword").toCharArray(),
+                tlsStringArray(tls, "protocolVersions"),
+                tlsStringArray(tls, "ciphers"),
+                tlsBool(tls, "trustAll"),
+                tlsBool(tls, "verifyHostName"),
+                connectTimeoutMillis);
+    }
+
+    // The TLS readers below are STRICT: ResolvedTls (types.bal) is a closed record with
+    // no nilable fields, so a null here means the .bal record and this native reader have
+    // drifted out of sync - a programming error, never a config value. We fail loudly
+    // rather than defaulting, because a silently-defaulted verifyHostName (false) would
+    // turn hostname verification off - a fail-open the lenient config readers must not risk.
+    private static Object tlsRequire(BMap<BString, Object> tls, String key) {
+        Object v = tls.get(StringUtils.fromString(key));
+        if (v == null) {
+            throw new IllegalStateException(
+                    "internal error: TLS field '" + key + "' missing from ResolvedTls");
+        }
+        return v;
+    }
+
+    private static String tlsStr(BMap<BString, Object> tls, String key) {
+        return ((BString) tlsRequire(tls, key)).getValue();
+    }
+
+    private static boolean tlsBool(BMap<BString, Object> tls, String key) {
+        return (Boolean) tlsRequire(tls, key);
+    }
+
+    private static String[] tlsStringArray(BMap<BString, Object> tls, String key) {
+        BArray arr = (BArray) tlsRequire(tls, key);   // present-but-empty is valid (JVM defaults)
+        String[] out = new String[(int) arr.size()];
+        for (int i = 0; i < out.length; i++) {
+            out[i] = arr.getBString(i).getValue();
+        }
+        return out;
+    }
+
+    private static String str(BMap<BString, Object> config, String key) {
+        BString v = config.getStringValue(StringUtils.fromString(key));
+        return v == null ? "" : v.getValue();
+    }
+
+    private static double decimalValue(BMap<BString, Object> map, String key) {
+        return ((BDecimal) map.get(StringUtils.fromString(key))).floatValue();
+    }
+
+    private static BindType toBindType(String mode) {
+        return switch (mode) {
+            case "TRANSMITTER" -> BindType.BIND_TX;
+            case "TRANSCEIVER" -> BindType.BIND_TRX;
+            default -> BindType.BIND_RX;
+        };
+    }
+}

@@ -1,15 +1,13 @@
 # Compiled class file
 *.class
-
 # Log file
 *.log
-
+# Config file (may carry real credentials for testing against a real SMSC)
+**/Config.toml
 # BlueJ files
 *.ctxt
-
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
-
 # Package Files #
 *.jar
 *.war
@@ -18,7 +16,54 @@
 *.zip
 *.tar.gz
 *.rar
+# ...except the Gradle wrapper jar, which must be committed - it's what lets
+# `./gradlew` bootstrap Gradle with no local Gradle install.
+!**/gradle-wrapper.jar
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
-replay_pid*
+
+# generated files
+build
+.gradle/
+target
+.ballerina
+generated/
+gradle-app.setting
+.gradletasknamecache
+
+# IDEA Files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# MacOS
+*.DS_Store
+
+# Ballerina
+velocity.log*
+*Ballerina.lock
+
+# Auto generated Dependencies.toml/Config.toml files
+examples/**/Dependencies.toml
+examples/**/Config.toml
+
+# VSCode
+.vscode
+.project
+.settings/
+ballerina/.project
+ballerina/.settings/
+build-config/checkstyle/.classpath
+build-config/checkstyle/.project
+build-config/checkstyle/.settings/
+native/.classpath
+native/.project
+native/.settings/
+
+# Environment files - the io.ballerina.plugin docker build harness writes one of
+# these (docker.env) containing a full dump of the host process environment,
+# secrets included. Never commit one of these; see the "docker.env" incident in
+# the SMPP connector's git history notes if this rule is ever removed.
+*.env

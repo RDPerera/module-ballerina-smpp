@@ -1,0 +1,16 @@
+[package]
+org = "ballerina_examples"
+name = "two_way_sms"
+version = "1.0.0"
+distribution = "2201.13.4"
+
+# Resolves `ballerina/smpp` from the local repository (populated by `./gradlew build`
+# in the repo root, which pushes ballerina/smpp there) rather than Central, since this
+# example lives inside the module-ballerina-smpp repository, ahead of the module's
+# first publish. Once `ballerina/smpp` is published, this override can be dropped and
+# `import ballerina/smpp;` resolves from Central like any other import.
+[[dependency]]
+org = "ballerina"
+name = "smpp"
+version = "1.0.0"
+repository = "local"

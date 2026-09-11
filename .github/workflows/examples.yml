@@ -1,0 +1,92 @@
+name: Examples
+
+# Builds every example against the in-repo ballerina/smpp module (each example's
+# Ballerina.toml resolves the dependency with `repository = "local"` — see
+# examples/README.md's "Note on the library dependency" — since the module has not
+# had its first Central publish yet) plus the mock SMSC harness, so the examples
+# can't silently rot.
+on:
+  push:
+    branches: [ main ]
+    paths: [ 'examples/**', 'ballerina/**', 'native/**', '.github/workflows/examples.yml' ]
+  pull_request:
+    branches: [ main ]
+    paths: [ 'examples/**', 'ballerina/**', 'native/**', '.github/workflows/examples.yml' ]
+
+jobs:
+  build-examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Set up Ballerina
+        uses: ballerina-platform/setup-ballerina@v1.1.0
+        with:
+          version: 2201.13.4
+
+      # Each example resolves `ballerina/smpp` with `repository = "local"`, which needs the
+      # package actually present in the local Ballerina repository, not just built on disk -
+      # `bal pack` + `bal push --repository=local` is what puts it there (the same thing a
+      # `./gradlew build` in the repo root does via the io.ballerina.plugin harness).
+      - name: Build and locally-publish the smpp module
+        env:
+          # Resolves io.ballerina.plugin from ballerina-platform GitHub Packages.
+          packageUser: ${{ github.repository_owner }}
+          packagePAT: ${{ secrets.BALLERINA_PACKAGE_PAT }}
+        run: |
+          ./gradlew :smpp-native:build :smpp-ballerina:copyToLib
+          cd ballerina
+          bal pack
+          bal push --repository=local
+
+      - name: Build all examples
+        run: |
+          set -e
+          for dir in examples/send-sms examples/receive-sms examples/two-way-sms; do
+            echo "::group::bal build $dir"
+            (cd "$dir" && bal build)
+            echo "::endgroup::"
+          done
+
+      # Run-and-assert: start the mock SMSC's `steady` scenario, run each example
+      # against it, and check it logs the expected line. Proves the examples work
+      # end to end, not just that they compile.
+      - name: Start the mock SMSC
+        working-directory: examples/mock-smsc
+        run: |
+          nohup ./gradlew run --args="steady 2775" > mock-smsc.log 2>&1 &
+          echo $! > mock-smsc.pid
+          sleep 20
+
+      - name: Smoke-test send-sms
+        working-directory: examples/send-sms
+        run: |
+          bal run | tee run.log
+          grep -q "submitted - messageId=" run.log
+
+      - name: Smoke-test receive-sms
+        working-directory: examples/receive-sms
+        run: |
+          timeout 15s bal run > run.log 2>&1 || true
+          cat run.log
+          grep -q "inbound SMS received" run.log
+
+      - name: Smoke-test two-way-sms
+        working-directory: examples/two-way-sms
+        run: |
+          timeout 15s bal run > run.log 2>&1 || true
+          cat run.log
+          grep -q "reply submitted" run.log
+
+      - name: Stop the mock SMSC
+        if: always()
+        working-directory: examples/mock-smsc
+        run: kill "$(cat mock-smsc.pid)" 2>/dev/null || true

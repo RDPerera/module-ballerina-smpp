@@ -1,0 +1,46 @@
+[package]
+org = "ballerina"
+name = "smpp"
+version = "1.0.0"
+authors = ["Ballerina"]
+keywords = ["smpp", "sms", "messaging", "Type/Connector", "Type/Trigger", "Area/Built-in", "Name/SMPP"]
+repository = "https://github.com/ballerina-platform/module-ballerina-smpp"
+icon = "icon.png"
+license = ["Apache-2.0"]
+# Must stay in lockstep with `ballerinaLangVersion` in gradle.properties — the
+# io.ballerina.plugin harness builds and tests the package with exactly that distribution,
+# so declaring a higher minimum here would claim support for a version nothing is built on.
+distribution = "2201.13.4"
+
+[build-options]
+observabilityIncluded = false
+
+[platform.java21]
+# Deliberate, not a known technical blocker: GraalVM native-image builds are very slow, and
+# native-image support is not a requirement for this package, so the build cost is not
+# justified. Whether jsmpp would work under native-image at all is untested and unknown.
+# Revisit only if a consumer actually needs it.
+graalvmCompatible = false
+
+# Hand-written native glue that bridges jsmpp into the Ballerina runtime (Client + Listener).
+[[platform.java21.dependency]]
+groupId = "io.ballerina.stdlib"
+artifactId = "smpp-native"
+version = "1.0.0"
+path = "../native/build/libs/smpp-native-1.0.0.jar"
+
+# Test-only bridge to the mock SMSC (native/src/testBridge) used by ballerina/tests/.
+[[platform.java21.dependency]]
+groupId = "io.ballerina.stdlib"
+artifactId = "smpp-native-test-bridge"
+version = "1.0.0"
+path = "../native/build/libs/smpp-native-test-bridge-1.0.0.jar"
+scope = "testOnly"
+
+# jsmpp, copied into ./lib by copyToLib. Its slf4j-api dependency is NOT bundled — the
+# Ballerina runtime already provides slf4j on the classpath (bundling it duplicates slf4j).
+[[platform.java21.dependency]]
+groupId = "org.jsmpp"
+artifactId = "jsmpp"
+version = "3.0.2"
+path = "./lib/jsmpp-3.0.2.jar"
