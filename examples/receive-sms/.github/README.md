@@ -1,0 +1,1 @@
+../A sample SMS receiver using Ballerina SMPP.md

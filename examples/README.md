@@ -4,9 +4,9 @@ This directory contains a set of examples to demonstrate how to use the `balleri
 
 ## Examples
 
-- [**Send an SMS**](send-sms): submit a single SMS using `smpp:Client`.
-- [**Receive SMS and delivery receipts**](receive-sms): bind `smpp:Listener` as a receiver and log inbound traffic.
-- [**Two-way SMS: a balance-enquiry short code**](two-way-sms): reply on the same session using `smpp:Caller`.
+- [**Send an SMS**](<send-sms/A sample SMS sender using Ballerina SMPP.md>): submit a single SMS using `smpp:Client`.
+- [**Receive SMS and delivery receipts**](<receive-sms/A sample SMS receiver using Ballerina SMPP.md>): bind `smpp:Listener` as a receiver and log inbound traffic.
+- [**Two-way SMS: a balance-enquiry short code**](<two-way-sms/A sample two-way SMS short code using Ballerina SMPP.md>): reply on the same session using `smpp:Caller`.
 
 ## Running the Examples
 
