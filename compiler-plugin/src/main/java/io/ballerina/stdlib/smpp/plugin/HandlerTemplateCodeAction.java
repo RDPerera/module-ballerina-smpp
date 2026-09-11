@@ -138,7 +138,7 @@ public class HandlerTemplateCodeAction implements CodeAction {
             return LS + "\tremote function " + method
                     + "(smpp:Sms sms, smpp:Caller caller) returns error? {" + LS
                     + "\t\tsmpp:SubmitResult _ = check caller->submit({" + LS
-                    + "\t\t\tdestAddr: sms.sourceAddress," + LS
+                    + "\t\t\tdestinationAddress: sms.sourceAddress," + LS
                     + "\t\t\tshortMessage: \"TODO: reply\"" + LS
                     + "\t\t});" + LS
                     + "\t}" + LS;
