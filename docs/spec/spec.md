@@ -1,7 +1,7 @@
 # Specification: Ballerina SMPP Library
 
-_Owners_: @ballerina-platform/team-ballerina-standard-library \
-_Reviewers_: @ballerina-platform/team-ballerina-standard-library \
+_Owners_: @RDPerera \
+_Reviewers_: @daneshk @DimuthuMadushan \
 _Created_: 2026/09/10 \
 _Updated_: 2026/09/10 \
 _Edition_: Swan Lake
