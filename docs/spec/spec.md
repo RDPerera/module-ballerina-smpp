@@ -1,6 +1,6 @@
 # Specification: Ballerina SMPP Library
 
-_Owners_: @RDPerera \
+_Owners_: @dilanp \
 _Reviewers_: @daneshk @DimuthuMadushan \
 _Created_: 2026/09/10 \
 _Updated_: 2026/09/10 \
