@@ -38,9 +38,10 @@ jobs:
       # `./gradlew build` in the repo root does via the io.ballerina.plugin harness).
       - name: Build and locally-publish the smpp module
         env:
-          # Resolves io.ballerina.plugin from ballerina-platform GitHub Packages.
-          packageUser: ${{ github.repository_owner }}
-          packagePAT: ${{ secrets.BALLERINA_PACKAGE_PAT }}
+          # Resolves io.ballerina.plugin from ballerina-platform GitHub Packages, matching
+          # the convention in ballerina-library's own reusable build templates.
+          packageUser: ${{ github.actor }}
+          packagePAT: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ./gradlew :smpp-native:build :smpp-ballerina:copyToLib
           cd ballerina
