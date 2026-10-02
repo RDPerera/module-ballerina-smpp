@@ -59,7 +59,7 @@ service on smsListener {
 
 - Package overview, quickstarts, and configuration: [`ballerina/README.md`](ballerina/README.md)
 - Full library specification (bind types, the `Client` operations, the `Listener` service contract, TLS, and the error taxonomy): [`docs/spec/spec.md`](docs/spec/spec.md)
-- Runnable examples (no carrier account needed — every example runs against a bundled mock SMSC): [`examples/`](examples/)
+- Runnable examples (each a self-contained package with a `Config.toml` template, connecting to a real SMSC): [`examples/`](examples/)
 
 ## Building from the source
 
@@ -89,7 +89,7 @@ Execute the commands below to build from the source.
    ./gradlew clean test
    ```
 
-- To build the without the tests:
+- To build without the tests:
 
    ```
    ./gradlew clean build -x test

@@ -24,6 +24,14 @@
 import ballerina/crypto;
 import ballerina/log;
 
+# TLS 1.2, as a JSSE protocol name. Named rather than repeated as a string literal since
+# it appears in `SecureSocket.protocolVersions`'s default, `validateSecureSocket`'s
+# allow-list, and `resolveTls`'s `InsecureSocket` resolution.
+const TLS_1_2 = "TLSv1.2";
+
+# TLS 1.3, as a JSSE protocol name. See `TLS_1_2`.
+const TLS_1_3 = "TLSv1.3";
+
 # The SMPP bind mode, per SMPP v3.4 §2.2. The full set of modes defined by the spec.
 # `ListenerConfig.bindType` (the `Listener`) narrows this to `ListenerBindType` (see
 # there for why `TRANSMITTER` is excluded there); `ClientConfig.bindType` (the `Client`)
@@ -329,7 +337,7 @@ public type SecureSocket record {|
     # Enabled TLS protocol versions, as JSSE protocol names. Defaults to TLS 1.3 and
     # TLS 1.2. TLS 1.1 and below are rejected at init — this connector enforces a TLS 1.2
     # floor and will not negotiate a downgraded, known-weak protocol even if configured to.
-    string[] protocolVersions = ["TLSv1.3", "TLSv1.2"];
+    string[] protocolVersions = [TLS_1_3, TLS_1_2];
     # Enabled cipher suites, as JSSE suite names. Empty (the default) uses the JDK's
     # default suite set for the negotiated protocol, which already excludes the
     # known-broken suites on a current JDK. Leave it empty unless your SMSC requires a
@@ -388,7 +396,7 @@ type ResolvedTls record {|
 #
 # + secureSocket - the TLS configuration to validate
 # + return - an `Error` describing the first violated constraint, or `()` if valid
-isolated function validateSecureSocket(SecureSocket secureSocket) returns error? {
+isolated function validateSecureSocket(SecureSocket secureSocket) returns Error? {
     crypto:TrustStore|string cert = secureSocket.cert;
     if cert is string {
         if cert.trim().length() == 0 {
@@ -401,7 +409,7 @@ isolated function validateSecureSocket(SecureSocket secureSocket) returns error?
         return error Error("secureSocket.protocolVersions must enable at least one TLS version");
     }
     foreach string v in secureSocket.protocolVersions {
-        if v != "TLSv1.2" && v != "TLSv1.3" {
+        if v != TLS_1_2 && v != TLS_1_3 {
             // Rejects TLSv1.1, TLSv1, SSLv3, SSLv2Hello, and typos alike: this connector
             // enforces a TLS 1.2 floor rather than letting the JVM maybe-negotiate a
             // known-weak protocol.
@@ -418,7 +426,7 @@ isolated function validateSecureSocket(SecureSocket secureSocket) returns error?
 # + return - the flat resolution, or `()` when the connection should stay plaintext
 isolated function resolveTls(SecureSocket|InsecureSocket? secureSocket) returns ResolvedTls? {
     if secureSocket is () {
-        return ();
+        return;
     }
     if secureSocket is InsecureSocket {
         log:printWarn("SMPP TLS: server-certificate verification is DISABLED (InsecureSocket). "
@@ -431,7 +439,7 @@ isolated function resolveTls(SecureSocket|InsecureSocket? secureSocket) returns 
             trustCertPath: "",
             keyStorePath: "",
             keyStorePassword: "",
-            protocolVersions: ["TLSv1.3", "TLSv1.2"],
+            protocolVersions: [TLS_1_3, TLS_1_2],
             ciphers: [],
             verifyHostName: false
         };

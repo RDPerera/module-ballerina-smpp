@@ -257,16 +257,7 @@ isolated function validateClientConfig(ClientConfig config) returns Error? {
     }
     SecureSocket|InsecureSocket? secureSocket = config.secureSocket;
     if secureSocket is SecureSocket {
-        // `validateSecureSocket` (types.bal) is declared `returns error?`, generic - wrap
-        // its failure into this module's `Error` rather than propagating it directly, so
-        // `Client.init`'s `Error?` contract holds even though the shared helper's own
-        // signature is widened. (No `cause =` here: `Error`'s detail type `ErrorDetail`
-        // declares individual fields, and a described detail type does not accept the
-        // generic `cause` argument alongside them.)
-        error? err = validateSecureSocket(secureSocket);
-        if err is error {
-            return error Error(err.message());
-        }
+        check validateSecureSocket(secureSocket);
     }
     // An InsecureSocket needs no validation (its one field admits only `true`); the loud
     // warning for it is logged at resolve time, once per Client init.

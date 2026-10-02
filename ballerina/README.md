@@ -2,7 +2,7 @@
 
 This module provides a `Client` and a `Listener` for **SMPP v3.4** (Short Message Peer-to-Peer), the protocol used by an ESME (External Short Messaging Entity) to exchange SMS traffic with a Short Message Service Centre (SMSC). It wraps the Java library [`org.jsmpp:jsmpp`](https://jsmpp.org/) through Ballerina's Java interoperability.
 
-## Key features
+### Key features
 
 - `smpp:Client` — a transmitter/receiver/transceiver ESME for `submit_sm`, `submit_multi`, `data_sm`, `query_sm`, `cancel_sm`, and `replace_sm`.
 - `smpp:Listener` — a receiver/transceiver ESME that dispatches inbound `deliver_sm`/`data_sm` (MO messages and delivery receipts) to a service.
@@ -124,7 +124,7 @@ Every failing operation returns a distinct `smpp:Error` whose `ErrorDetail` carr
 
 ## Examples
 
-Runnable, end-to-end examples live in [`examples/`](https://github.com/ballerina-platform/module-ballerina-smpp/tree/main/examples) in the source repository. Each runs against a bundled mock SMSC, so no carrier account is needed:
+Runnable, end-to-end examples live in [`examples/`](https://github.com/ballerina-platform/module-ballerina-smpp/tree/main/examples) in the source repository. Each is a self-contained package with a `Config.toml` template, connecting to a real SMSC:
 
 - [send-sms](https://github.com/ballerina-platform/module-ballerina-smpp/tree/main/examples/send-sms) — `Client`-only: connect, `submit`, `close`.
 - [receive-sms](https://github.com/ballerina-platform/module-ballerina-smpp/tree/main/examples/receive-sms) — `Listener`-only: `onDeliverSm` handling MO messages and delivery receipts.
