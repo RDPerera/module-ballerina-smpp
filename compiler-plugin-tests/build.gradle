@@ -1,0 +1,95 @@
+/*
+ * Copyright (c) 2026, WSO2 LLC. (http://www.wso2.org).
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
+
+plugins {
+    id 'java'
+    id 'checkstyle'
+    id 'com.github.spotbugs'
+}
+
+description = 'Ballerina - SMPP Compiler Plugin Tests'
+
+dependencies {
+    checkstyle project(':checkstyle')
+    checkstyle "com.puppycrawl.tools:checkstyle:${checkstylePluginVersion}"
+
+    implementation project(':smpp-compiler-plugin')
+
+    testImplementation group: 'org.ballerinalang', name: 'ballerina-lang', version: "${ballerinaLangVersion}"
+    testImplementation group: 'org.ballerinalang', name: 'ballerina-tools-api', version: "${ballerinaLangVersion}"
+    testImplementation group: 'org.ballerinalang', name: 'ballerina-parser', version: "${ballerinaLangVersion}"
+    testImplementation group: 'org.testng', name: 'testng', version: "${testngVersion}"
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+test {
+    useTestNG() {
+        suites 'src/test/resources/testng.xml'
+    }
+    testLogging.showStandardStreams = true
+    testLogging {
+        events "PASSED", "FAILED", "SKIPPED"
+        afterSuite { desc, result ->
+            if (!desc.parent) {
+                def output = "Results: ${result.resultType} (${result.testCount} tests, " +
+                        "${result.successfulTestCount} successes, ${result.failedTestCount} failures, " +
+                        "${result.skippedTestCount} skipped)"
+                def startItem = '|  ', endItem = '  |'
+                def repeatLength = startItem.length() + output.length() + endItem.length()
+                println('\n' + ('-' * repeatLength) + '\n' + startItem + output + endItem + '\n' + ('-' * repeatLength))
+            }
+        }
+    }
+}
+
+def excludePattern = '**/module-info.java'
+tasks.withType(Checkstyle) {
+    exclude excludePattern
+}
+
+checkstyle {
+    toolVersion '7.8.2'
+    configFile rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    configProperties = ["suppressionFile" : file("${rootDir}/build-config/checkstyle/build/suppressions.xml")]
+}
+
+checkstyleMain.dependsOn(":checkstyle:downloadCheckstyleRuleFiles")
+checkstyleTest.dependsOn(":checkstyle:downloadCheckstyleRuleFiles")
+
+spotbugsMain {
+    enabled = false
+}
+
+spotbugsTest {
+    enabled = false
+}
+
+// Needs the plugin jar (embedded via CompilerPlugin.toml) resolvable from the local
+// repository, and the native jar it depends on - same prerequisites `bal build`ing any
+// consumer of this package would need.
+test.dependsOn ':smpp-native:build'
+test.dependsOn ':smpp-ballerina:copyToLib'
+test.dependsOn ':smpp-ballerina:build'

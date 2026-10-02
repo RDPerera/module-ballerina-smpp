@@ -1,0 +1,71 @@
+name: Release
+
+# Publishes ballerina/smpp to Ballerina Central. NOTE: Central pushes are IMMUTABLE — a
+# version can be published only once. Triggers:
+#   - Push a version tag (e.g. v1.0.0)  -> build + test + pack + PUBLISH to Central.
+#   - Run manually (workflow_dispatch)  -> DRY RUN by default (build + test + pack + push to a
+#     local repo; Central is NOT touched). Tick "publish" to actually publish from a manual run.
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to Ballerina Central? Central is IMMUTABLE. Leave unchecked for a dry run."
+        type: boolean
+        default: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Installs bal on the runner for the pack/push steps (the gradle build itself runs bal
+      # inside the ballerina/ballerina:2201.13.4 container).
+      - name: Set up Ballerina
+        uses: ballerina-platform/setup-ballerina@v1
+        with:
+          version: 2201.13.4
+
+      - name: Build and test
+        env:
+          packageUser: ${{ github.repository_owner }}
+          packagePAT: ${{ secrets.BALLERINA_PACKAGE_PAT }}
+        run: ./gradlew build --stacktrace
+
+      # The isConnector=true gradle build runs bal in Docker as root, leaving target/, lib/, and
+      # native/build/ root-owned on the runner. Reclaim them so the host-side bal pack/push can write.
+      - name: Reclaim ownership of Docker-built outputs
+        run: sudo chown -R "$(id -u):$(id -g)" .
+
+      - name: Pack
+        working-directory: ballerina
+        run: |
+          bal pack
+          echo "== Publishable artifact =="
+          ls -l target/bala/*.bala
+
+      # Dry run: exercise the push mechanics against a local repo — no Central, no token.
+      - name: Dry-run push (local repository only)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.publish != 'true' }}
+        working-directory: ballerina
+        run: |
+          echo "DRY RUN — pushing to the local repository, NOT Ballerina Central."
+          bal push --repository=local
+
+      # Real publish: only on a version tag, or a manual run with publish=true.
+      - name: Publish to Ballerina Central (IMMUTABLE)
+        if: ${{ github.event_name == 'push' || github.event.inputs.publish == 'true' }}
+        working-directory: ballerina
+        env:
+          BALLERINA_CENTRAL_ACCESS_TOKEN: ${{ secrets.BALLERINA_CENTRAL_ACCESS_TOKEN }}
+        run: bal push

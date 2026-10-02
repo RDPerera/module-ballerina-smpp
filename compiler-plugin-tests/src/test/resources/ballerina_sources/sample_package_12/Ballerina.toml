@@ -1,0 +1,11 @@
+[package]
+org = "fixture"
+name = "sample_package_12"
+version = "0.1.0"
+distribution = "2201.12.0"
+
+[[dependency]]
+org = "ballerina"
+name = "smpp"
+version = "1.0.0"
+repository = "local"

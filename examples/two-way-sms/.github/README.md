@@ -1,0 +1,1 @@
+../A sample two-way SMS short code using Ballerina SMPP.md

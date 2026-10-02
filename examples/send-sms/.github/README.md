@@ -1,0 +1,1 @@
+../A sample SMS sender using Ballerina SMPP.md

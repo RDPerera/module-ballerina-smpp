@@ -1,0 +1,6 @@
+[send_sms]
+host = "smsc.example.com"
+port = 2775
+systemId = "your-system-id"
+password = "your-password"
+destinationNumber = "94771234567"
