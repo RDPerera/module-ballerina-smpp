@@ -16,6 +16,6 @@ Each example is a self-contained Ballerina package. From inside an example's dir
 $ bal run
 ```
 
-Each example resolves `ballerina/smpp` from your local Ballerina repository — build and publish it there first by running `./gradlew build` from the repository root.
+Each example resolves `ballerina/smpp` from your local Ballerina repository — build and publish it there first by running `./gradlew build -PpublishToLocalCentral=true` from the repository root.
 
 All examples need a real SMPP v3.4 SMSC to connect to; edit each example's `Config.toml` with your SMSC's connection details before running it.

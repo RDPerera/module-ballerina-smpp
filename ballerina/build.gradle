@@ -1,8 +1,16 @@
 // Uses the official io.ballerina.plugin Gradle harness, matching how module-ballerina-*
-// stdlib modules are packaged (see module-ballerina-ftp). The plugin resolves from
-// ballerina-platform GitHub Packages and therefore requires a read:packages PAT
-// (packageUser / packagePAT) to build — see settings.gradle.
+// stdlib modules are packaged (see module-ballerina-email). The plugin resolves both itself
+// and the jballerina-tools distribution it builds with from ballerina-platform GitHub
+// Packages, and therefore requires a read:packages PAT (packageUser / packagePAT) to build —
+// see settings.gradle.
 import org.apache.tools.ant.taskdefs.condition.Os
+import org.gradle.process.ExecOperations
+
+import javax.inject.Inject
+
+abstract class BallerinaExecHelper {
+    @Inject abstract ExecOperations getExecOperations()
+}
 
 plugins {
     id 'io.ballerina.plugin'
@@ -32,16 +40,22 @@ def stripBallerinaExtensionVersion(String extVersion) {
     }
 }
 
+// `langVersion` makes the plugin unpack the matching jballerina-tools distribution into
+// target/ballerina-runtime and build with it (the same mechanism every other stdlib module
+// uses), rather than its Docker mode. The unpacked runtime is also what compiler-plugin-tests
+// loads the fixture packages against.
 ballerina {
     packageOrganization = packageOrg
     module = packageName
-    testCoverageParam = "--code-coverage --coverage-format=xml"
-    isConnector = true
-    platform = "java21"
+    langVersion = ballerinaLangVersion
 }
 
 configurations {
     externalJars
+    // Consumed by the plugin's copyStdlibs task (stdlib balas to pre-seed the unpacked
+    // distribution's repo with). Empty here: the package's stdlib dependencies resolve from
+    // Central as usual, but the task chain must still exist - see updateTomlFiles below.
+    ballerinaStdLibs
 }
 
 dependencies {
@@ -51,6 +65,13 @@ dependencies {
     // configuration into ./lib, which Ballerina.toml references by path (self-contained
     // package).
     externalJars(group: 'org.jsmpp', name: 'jsmpp', version: "${jsmppVersion}") {
+        transitive = false
+    }
+    // The distribution the plugin unpacks and builds with. The plugin adds this dependency
+    // itself, but at apply time - before the `ballerina {}` block above has set langVersion -
+    // so its copy reads `jballerina-tools:null`; declaring the real coordinate here (as
+    // module-ballerina-email does in its root build) is what actually resolves.
+    jbalTools("org.ballerinalang:jballerina-tools:${ballerinaLangVersion}") {
         transitive = false
     }
 }
@@ -77,9 +98,10 @@ tasks.register('updateTomlFiles') {
 // e.g. a copied/audit checkout) - `git commit`'s failure there is expected, not a build
 // problem, and must never fail the surrounding build.
 tasks.register('commitTomlFiles') {
+    def execHelper = project.objects.newInstance(BallerinaExecHelper)
     doLast {
-        project.exec {
-            ignoreExitValue true
+        execHelper.execOperations.exec {
+            ignoreExitValue = true
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
                 commandLine 'cmd', '/c', "git commit -m \"[Automated] Update the toml files\" Ballerina.toml Dependencies.toml"
             } else {
@@ -89,7 +111,32 @@ tasks.register('commitTomlFiles') {
     }
 }
 
+publishing {
+    publications {
+        maven(MavenPublication) {
+            artifact source: createArtifactZip, extension: 'zip'
+        }
+    }
+
+    repositories {
+        maven {
+            name = "GitHubPackages"
+            url = uri("https://maven.pkg.github.com/ballerina-platform/module-${packageOrg}-${packageName}")
+            credentials {
+                username = System.getenv("publishUser")
+                password = System.getenv("publishPAT")
+            }
+        }
+    }
+}
+
+// copyStdlibs -> unpackStdLibs -> unpackJballerinaTools is the plugin's chain that unpacks
+// the jballerina-tools distribution into ballerina/build and target/ballerina-runtime;
+// without this edge nothing triggers it and `bal` is simply absent at test/build time.
+updateTomlFiles.dependsOn copyStdlibs
+
 // Populate ./lib and build the native glue before the Ballerina package.
+build.dependsOn "generatePomFileForMavenPublication"
 build.dependsOn copyToLib
 build.dependsOn ":${packageName}-native:build"
 // bal reads CompilerPlugin.toml whenever it loads this package (once the compiler-plugin
@@ -103,18 +150,25 @@ test.dependsOn ":${packageName}-compiler-plugin:jar"
 // and the main tree masked that by having the jar left over from earlier builds.
 test.dependsOn copyToLib
 
-// `bal test` (2201.13.x, with coverage) exits 0 even when tests FAIL — a compile error
-// propagates a nonzero exit through the docker wrapper, but test failures do not. So the
-// plugin's test task, and therefore `./gradlew build`, would report BUILD SUCCESSFUL with a
-// red suite. Gate on the report the test run writes instead.
+publishToMavenLocal.dependsOn build
+publish.dependsOn build
+
+// `bal test` with coverage has been observed to exit 0 even when tests FAIL, so the plugin's
+// test task, and therefore `./gradlew build`, could report BUILD SUCCESSFUL with a red suite.
+// Gate on the report the test run writes instead. Skipped for GraalVM runs
+// (-PbalGraalVMTest), where the plugin disables coverage and no test_results.json is written.
 test {
+    def resultsFile = file("${project.projectDir}/target/report/test_results.json")
+    def graalvmRun = project.hasProperty('balGraalVMTest')
     // Staleness guard: a green report from a PREVIOUS run must not satisfy the gate if
     // bal test dies before writing a fresh one.
     doFirst {
-        delete file("${project.projectDir}/target/report/test_results.json")
+        delete resultsFile
     }
     doLast {
-        def resultsFile = file("${project.projectDir}/target/report/test_results.json")
+        if (graalvmRun) {
+            return
+        }
         if (!resultsFile.exists()) {
             throw new GradleException("bal test produced no target/report/test_results.json — cannot verify the suite actually ran")
         }

@@ -33,20 +33,17 @@ jobs:
           version: 2201.12.0
 
       # Each example resolves `ballerina/smpp` with `repository = "local"`, which needs the
-      # package actually present in the local Ballerina repository, not just built on disk -
-      # `bal pack` + `bal push --repository=local` is what puts it there (the same thing a
-      # `./gradlew build` in the repo root does via the io.ballerina.plugin harness).
+      # package actually present in the local Ballerina repository, not just built on disk.
+      # -PpublishToLocalCentral=true makes the io.ballerina.plugin build `bal push` the packed
+      # bala there (with the same distribution it built with); the module's own tests are
+      # skipped since this job only compiles the examples.
       - name: Build and locally-publish the smpp module
         env:
-          # Resolves io.ballerina.plugin from ballerina-platform GitHub Packages, matching
-          # the convention in ballerina-library's own reusable build templates.
+          # Resolves io.ballerina.plugin and jballerina-tools from ballerina-platform GitHub
+          # Packages, matching the convention in ballerina-library's own build templates.
           packageUser: ${{ github.actor }}
           packagePAT: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          ./gradlew :smpp-native:build :smpp-ballerina:copyToLib
-          cd ballerina
-          bal pack
-          bal push --repository=local
+        run: ./gradlew build -x test -PpublishToLocalCentral=true
 
       - name: Build all examples
         run: |

@@ -29,23 +29,20 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      # Installs bal on the runner for the pack/push steps (the gradle build itself runs bal
-      # inside the ballerina/ballerina:2201.13.4 container).
+      # Installs bal on the runner for the pack/push steps. Must match ballerinaLangVersion in
+      # gradle.properties, which is the distribution the gradle build builds and tests with.
       - name: Set up Ballerina
         uses: ballerina-platform/setup-ballerina@v1
         with:
-          version: 2201.13.4
+          version: 2201.12.0
 
       - name: Build and test
         env:
-          packageUser: ${{ github.repository_owner }}
-          packagePAT: ${{ secrets.BALLERINA_PACKAGE_PAT }}
+          # Resolves io.ballerina.plugin and jballerina-tools from ballerina-platform GitHub
+          # Packages, matching the convention in ballerina-library's own build templates.
+          packageUser: ${{ github.actor }}
+          packagePAT: ${{ secrets.GITHUB_TOKEN }}
         run: ./gradlew build --stacktrace
-
-      # The isConnector=true gradle build runs bal in Docker as root, leaving target/, lib/, and
-      # native/build/ root-owned on the runner. Reclaim them so the host-side bal pack/push can write.
-      - name: Reclaim ownership of Docker-built outputs
-        run: sudo chown -R "$(id -u):$(id -g)" .
 
       - name: Pack
         working-directory: ballerina
