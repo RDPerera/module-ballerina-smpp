@@ -39,13 +39,11 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-}
-
 test {
+    // The fixtures resolve `ballerina/smpp` from the unpacked distribution's repo
+    // (target/ballerina-runtime, populated by :smpp-ballerina:build) and its dependencies
+    // from the caches that build already filled - never from the network.
+    systemProperty "ballerina.offline.flag", "true"
     useTestNG() {
         suites 'src/test/resources/testng.xml'
     }
@@ -71,8 +69,8 @@ tasks.withType(Checkstyle) {
 }
 
 checkstyle {
-    toolVersion '7.8.2'
-    configFile rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    toolVersion = "${project.checkstylePluginVersion}"
+    configFile = rootProject.file("build-config/checkstyle/build/checkstyle.xml")
     configProperties = ["suppressionFile" : file("${rootDir}/build-config/checkstyle/build/suppressions.xml")]
 }
 
@@ -87,9 +85,7 @@ spotbugsTest {
     enabled = false
 }
 
-// Needs the plugin jar (embedded via CompilerPlugin.toml) resolvable from the local
-// repository, and the native jar it depends on - same prerequisites `bal build`ing any
-// consumer of this package would need.
-test.dependsOn ':smpp-native:build'
-test.dependsOn ':smpp-ballerina:copyToLib'
+// :smpp-ballerina:build unpacks the distribution into target/ballerina-runtime and copies the
+// freshly packed bala into its repo - the two things the fixtures need to compile.
 test.dependsOn ':smpp-ballerina:build'
+build.dependsOn ':smpp-ballerina:build'

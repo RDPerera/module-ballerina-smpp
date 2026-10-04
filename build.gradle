@@ -8,6 +8,11 @@ allprojects {
     group = project.group
     version = project.version
 
+    // Registers the `publish` lifecycle task (a no-op here, since no subproject declares a
+    // MavenPublication) so the shared ballerina-library CI template's `./gradlew publish`
+    // step has a task to run, matching module-ballerina-email/module-ballerinax-kafka.
+    apply plugin: 'maven-publish'
+
     repositories {
         mavenLocal()
         mavenCentral()
