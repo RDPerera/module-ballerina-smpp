@@ -368,21 +368,24 @@ public type InsecureSocket record {|
 |};
 
 # Internal, flat resolution of the `SecureSocket|InsecureSocket?` union — the native layer
-# reads fixed fields off this record with no union-tag inspection (empty string = absent).
-# Shared by `Client` and `Listener` init, both of which call `resolveTls()` below.
+# reads fixed fields off this record with no union-tag inspection. Path fields use the empty
+# string for "absent"; the two password fields are instead optional and only ever set from
+# the user's own `crypto:TrustStore`/`crypto:KeyStore`, so no placeholder secret literal
+# appears in source. Shared by `Client` and `Listener` init, both of which call
+# `resolveTls()` below.
 type ResolvedTls record {|
     # `true` only for `InsecureSocket`: chain verification is disabled entirely.
     boolean trustAll;
     # Truststore file path, when `cert` was a `crypto:TrustStore`; else empty.
     string trustStorePath;
-    # Truststore password, when `cert` was a `crypto:TrustStore`; else empty.
-    string trustStorePassword;
+    # Truststore password; present only when `cert` was a `crypto:TrustStore`.
+    string trustStorePassword?;
     # PEM CA-certificate path, when `cert` was a plain path string; else empty.
     string trustCertPath;
     # Keystore file path, when mTLS `key` was supplied; else empty.
     string keyStorePath;
-    # Keystore password, when mTLS `key` was supplied; else empty.
-    string keyStorePassword;
+    # Keystore password; present only when mTLS `key` was supplied.
+    string keyStorePassword?;
     # Validated (TLS 1.2 floor) protocol versions to enable.
     string[] protocolVersions;
     # Cipher suites to enable; empty = JDK defaults.
@@ -435,43 +438,31 @@ isolated function resolveTls(SecureSocket|InsecureSocket? secureSocket) returns 
         return {
             trustAll: true,
             trustStorePath: "",
-            trustStorePassword: "",
             trustCertPath: "",
             keyStorePath: "",
-            keyStorePassword: "",
             protocolVersions: [TLS_1_3, TLS_1_2],
             ciphers: [],
             verifyHostName: false
         };
     }
-    string trustStorePath = "";
-    string trustStorePassword = "";
-    string trustCertPath = "";
     crypto:TrustStore|string cert = secureSocket.cert;
-    if cert is crypto:TrustStore {
-        trustStorePath = cert.path;
-        trustStorePassword = cert.password;
-    } else {
-        trustCertPath = cert;
-    }
-    string keyStorePath = "";
-    string keyStorePassword = "";
     crypto:KeyStore? key = secureSocket?.key;
-    if key is crypto:KeyStore {
-        keyStorePath = key.path;
-        keyStorePassword = key.password;
-    }
-    return {
+    ResolvedTls resolved = {
         trustAll: false,
-        trustStorePath,
-        trustStorePassword,
-        trustCertPath,
-        keyStorePath,
-        keyStorePassword,
+        trustStorePath: cert is crypto:TrustStore ? cert.path : "",
+        trustCertPath: cert is string ? cert : "",
+        keyStorePath: key is crypto:KeyStore ? key.path : "",
         protocolVersions: secureSocket.protocolVersions,
         ciphers: secureSocket.ciphers,
         verifyHostName: secureSocket.verifyHostName
     };
+    if cert is crypto:TrustStore {
+        resolved.trustStorePassword = cert.password;
+    }
+    if key is crypto:KeyStore {
+        resolved.keyStorePassword = key.password;
+    }
+    return resolved;
 }
 
 # A received short message (DELIVER_SM / DATA_SM) surfaced to a `Listener`'s attached
