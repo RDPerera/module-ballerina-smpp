@@ -1009,10 +1009,10 @@ public final class NativeListener {
             int connectTimeoutMillis) throws Exception {
         return SmppSslConnectionFactory.create(
                 tlsStr(tls, "trustStorePath"),
-                tlsStr(tls, "trustStorePassword").toCharArray(),
+                tlsOptionalStr(tls, "trustStorePassword").toCharArray(),
                 tlsStr(tls, "trustCertPath"),
                 tlsStr(tls, "keyStorePath"),
-                tlsStr(tls, "keyStorePassword").toCharArray(),
+                tlsOptionalStr(tls, "keyStorePassword").toCharArray(),
                 tlsStringArray(tls, "protocolVersions"),
                 tlsStringArray(tls, "ciphers"),
                 tlsBool(tls, "trustAll"),
@@ -1036,6 +1036,13 @@ public final class NativeListener {
 
     private static String tlsStr(BMap<BString, Object> tls, String key) {
         return ((BString) tlsRequire(tls, key)).getValue();
+    }
+
+    // The ResolvedTls password fields are optional - present only when the user supplied a
+    // truststore/keystore - so absence is the normal "no password" case, not an error.
+    private static String tlsOptionalStr(BMap<BString, Object> tls, String key) {
+        BString v = tls.getStringValue(StringUtils.fromString(key));
+        return v == null ? "" : v.getValue();
     }
 
     private static boolean tlsBool(BMap<BString, Object> tls, String key) {
