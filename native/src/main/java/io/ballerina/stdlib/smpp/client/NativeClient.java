@@ -1082,8 +1082,8 @@ public final class NativeClient {
     // The ResolvedTls password fields are optional - present only when the user supplied a
     // truststore/keystore - so absence is the normal "no password" case, not an error.
     private static String tlsOptionalStr(BMap<BString, Object> tls, String key) {
-        Object v = tls.get(StringUtils.fromString(key));
-        return v == null ? "" : ((BString) v).getValue();
+        BString v = tls.getStringValue(StringUtils.fromString(key));
+        return v == null ? "" : v.getValue();
     }
 
     private static boolean tlsBool(BMap<BString, Object> tls, String key) {
