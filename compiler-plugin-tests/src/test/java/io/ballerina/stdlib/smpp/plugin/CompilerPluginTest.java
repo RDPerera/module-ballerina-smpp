@@ -27,10 +27,6 @@ import io.ballerina.tools.diagnostics.Diagnostic;
 import org.testng.Assert;
 import org.testng.annotations.Test;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -44,14 +40,17 @@ import java.util.stream.Collectors;
  * ({@link BuildProject}), and the {@code SMPP_}-prefixed diagnostics it produces are
  * asserted exactly - both the codes present AND that no other {@code SMPP_} code leaked in.
  * Mirrors the convention used by module-ballerina-email/module-ballerinax-kafka's own
- * {@code compiler-plugin-tests} modules (TestNG + {@code io.ballerina.projects} APIs, no
- * Docker involved).
+ * {@code compiler-plugin-tests} modules (TestNG + {@code io.ballerina.projects} APIs), including
+ * where the Ballerina distribution comes from: {@code target/ballerina-runtime}, unpacked by the
+ * io.ballerina.plugin build of {@code :smpp-ballerina}, which also copies the freshly packed
+ * {@code ballerina/smpp} bala into that runtime's repo for the fixtures to resolve.
  */
 public class CompilerPluginTest {
 
     private static final Path RESOURCE_DIRECTORY = Paths.get("src", "test", "resources", "ballerina_sources")
             .toAbsolutePath();
-    private static final Path DISTRIBUTION_PATH = resolveBallerinaHome();
+    private static final Path DISTRIBUTION_PATH = Paths.get("../", "target", "ballerina-runtime")
+            .toAbsolutePath();
 
     // sample_package_1  - valid_declaration:     the canonical bare-declaration reply service
     // sample_package_2  - valid_shapes_class:    service-class + explicit-attach idiom
@@ -165,42 +164,5 @@ public class CompilerPluginTest {
     private ProjectEnvironmentBuilder getEnvironmentBuilder() {
         Environment environment = EnvironmentBuilder.getBuilder().setBallerinaHome(DISTRIBUTION_PATH).build();
         return ProjectEnvironmentBuilder.getBuilder(environment);
-    }
-
-    /**
-     * Resolves the local Ballerina distribution root: {@code BALLERINA_HOME} if set,
-     * otherwise {@code bal home}'s own answer. Unlike module-ballerina-email (which
-     * extracts a {@code jballerina-tools} Maven artifact into {@code target/ballerina-runtime}
-     * via the root build), this repository already requires a real {@code bal} on PATH for
-     * its examples/CI (see {@code .github/workflows/examples.yml}'s
-     * {@code setup-ballerina} step), so reusing that installation avoids a second,
-     * redundant distribution-provisioning mechanism.
-     *
-     * @return the resolved distribution root
-     */
-    private static Path resolveBallerinaHome() {
-        String fromEnv = System.getenv("BALLERINA_HOME");
-        if (fromEnv != null && !fromEnv.isBlank()) {
-            return Paths.get(fromEnv).toAbsolutePath();
-        }
-        try {
-            Process process = new ProcessBuilder("bal", "home").redirectErrorStream(true).start();
-            String output;
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                output = reader.readLine();
-            }
-            int exitCode = process.waitFor();
-            if (exitCode != 0 || output == null || output.isBlank()) {
-                throw new IllegalStateException("'bal home' failed with exit code " + exitCode);
-            }
-            return Paths.get(output.trim()).toAbsolutePath();
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            throw new IllegalStateException("Could not resolve a Ballerina distribution: set BALLERINA_HOME, "
-                    + "or ensure 'bal' is on PATH", e);
-        }
     }
 }

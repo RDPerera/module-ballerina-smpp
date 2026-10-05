@@ -17,6 +17,7 @@
 plugins {
     id 'java-library'
     id 'checkstyle'
+    id 'jacoco'
 }
 
 description = 'Ballerina - SMPP Native'
@@ -38,11 +39,16 @@ dependencies {
     testImplementation "org.ballerinalang:ballerina-runtime:${ballerinaLangVersion}"
     testImplementation platform('org.junit:junit-bom:5.10.2')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+jacoco {
+    toolVersion = jacocoVersion
 }
 
 checkstyle {
-    toolVersion '7.8.2'
-    configFile rootProject.file("build-config/checkstyle/build/checkstyle.xml")
+    toolVersion = "${project.checkstylePluginVersion}"
+    configFile = rootProject.file("build-config/checkstyle/build/checkstyle.xml")
     configProperties = ["suppressionFile" : file("${rootDir}/build-config/checkstyle/build/suppressions.xml")]
 }
 
@@ -52,12 +58,7 @@ tasks.withType(Checkstyle) {
 }
 
 checkstyleMain.dependsOn(":checkstyle:downloadCheckstyleRuleFiles")
-
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-}
+checkstyleTest.dependsOn(":checkstyle:downloadCheckstyleRuleFiles")
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
@@ -67,7 +68,18 @@ test {
     useJUnitPlatform()
     testLogging {
         events 'passed', 'skipped', 'failed'
-        exceptionFormat 'full'
+        exceptionFormat = 'full'
+    }
+    finalizedBy jacocoTestReport
+}
+
+// The XML report is what the shared build workflow's Codecov upload picks up, alongside the
+// Ballerina test run's own coverage of these classes.
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = false
     }
 }
 

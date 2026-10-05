@@ -1,5 +1,6 @@
 plugins {
     id "com.github.spotbugs"
+    id "net.researchgate.release"
 }
 
 description = 'Ballerina - SMPP'
@@ -7,6 +8,11 @@ description = 'Ballerina - SMPP'
 allprojects {
     group = project.group
     version = project.version
+
+    // Registers the `publish` lifecycle task (a no-op here, since no subproject declares a
+    // MavenPublication) so the shared ballerina-library CI template's `./gradlew publish`
+    // step has a task to run, matching module-ballerina-email/module-ballerinax-kafka.
+    apply plugin: 'maven-publish'
 
     repositories {
         mavenLocal()
@@ -34,16 +40,45 @@ allprojects {
     }
 }
 
-tasks.register('build') {
-    dependsOn(":smpp-native:build")
-    dependsOn(":smpp-compiler-plugin:build")
-    dependsOn(":smpp-compiler-plugin-tests:build")
-    dependsOn(":smpp-ballerina:build")
+// Drives the shared release-package workflow's `./gradlew clean release`: strips -SNAPSHOT,
+// tags v<version> on the release-<version> branch the workflow checks out, and bumps
+// gradle.properties to the next snapshot. Same configuration as module-ballerina-email.
+def moduleVersion = project.version.replace("-SNAPSHOT", "")
+
+release {
+    buildTasks = ['build']
+    failOnSnapshotDependencies = true
+    versionPropertyFile = 'gradle.properties'
+    tagTemplate = 'v${version}'
+
+    git {
+        requireBranch = "release-${moduleVersion}"
+        pushToRemote = 'origin'
+    }
 }
 
-tasks.register('clean') {
-    dependsOn(":smpp-native:clean")
-    dependsOn(":smpp-compiler-plugin:clean")
-    dependsOn(":smpp-compiler-plugin-tests:clean")
-    dependsOn(":smpp-ballerina:clean")
+// The release plugin registers a root `build` task of its own, so configure it when it
+// already exists rather than re-declaring it (same guard as module-ballerina-email).
+def rootBuildDeps = [":smpp-native:build", ":smpp-compiler-plugin:build",
+                     ":smpp-compiler-plugin-tests:build", ":smpp-ballerina:build"]
+if (tasks.names.contains('build')) {
+    tasks.named('build') {
+        dependsOn(rootBuildDeps)
+    }
+} else {
+    tasks.register('build') {
+        dependsOn(rootBuildDeps)
+    }
+}
+
+def rootCleanDeps = [":smpp-native:clean", ":smpp-compiler-plugin:clean",
+                     ":smpp-compiler-plugin-tests:clean", ":smpp-ballerina:clean"]
+if (tasks.names.contains('clean')) {
+    tasks.named('clean') {
+        dependsOn(rootCleanDeps)
+    }
+} else {
+    tasks.register('clean') {
+        dependsOn(rootCleanDeps)
+    }
 }
