@@ -1,0 +1,16 @@
+ignore:
+  - "compiler-plugin-tests"
+  - "examples"
+  - "load-tests"
+  # Test-only mock SMSC and bridge (scope = "testOnly" jar), exercised by the Ballerina tests
+  # but not part of the shipped connector.
+  - "native/src/testBridge"
+
+coverage:
+  precision: 2
+  round: down
+  range: "60...80"
+  status:
+    project:
+      default:
+        target: 80
