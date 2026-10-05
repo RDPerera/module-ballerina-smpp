@@ -34,14 +34,14 @@ allprojects {
     }
 }
 
-task build {
+tasks.register('build') {
     dependsOn(":smpp-native:build")
     dependsOn(":smpp-compiler-plugin:build")
     dependsOn(":smpp-compiler-plugin-tests:build")
     dependsOn(":smpp-ballerina:build")
 }
 
-task clean {
+tasks.register('clean') {
     dependsOn(":smpp-native:clean")
     dependsOn(":smpp-compiler-plugin:clean")
     dependsOn(":smpp-compiler-plugin-tests:clean")

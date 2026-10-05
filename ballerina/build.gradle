@@ -3,10 +3,18 @@
 // ballerina-platform GitHub Packages and therefore requires a read:packages PAT
 // (packageUser / packagePAT) to build — see settings.gradle.
 import org.apache.tools.ant.taskdefs.condition.Os
+import org.gradle.process.ExecOperations
 
 plugins {
     id 'io.ballerina.plugin'
 }
+
+abstract class ExecHelper {
+    @javax.inject.Inject
+    abstract ExecOperations getExecOperations()
+}
+
+def execHelper = project.objects.newInstance(ExecHelper)
 
 description = 'Ballerina - SMPP Ballerina Connector'
 
@@ -36,7 +44,7 @@ ballerina {
     packageOrganization = packageOrg
     module = packageName
     testCoverageParam = "--code-coverage --coverage-format=xml"
-    isConnector = true
+    connector = true
     platform = "java21"
 }
 
@@ -78,7 +86,7 @@ tasks.register('updateTomlFiles') {
 // problem, and must never fail the surrounding build.
 tasks.register('commitTomlFiles') {
     doLast {
-        project.exec {
+        execHelper.execOperations.exec {
             ignoreExitValue true
             if (Os.isFamily(Os.FAMILY_WINDOWS)) {
                 commandLine 'cmd', '/c', "git commit -m \"[Automated] Update the toml files\" Ballerina.toml Dependencies.toml"
