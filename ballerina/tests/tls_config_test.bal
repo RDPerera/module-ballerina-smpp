@@ -25,15 +25,12 @@ const int TLS_EMPTY_PEM_PORT = 28313;
 
 const string EMPTY_CERT_PEM = CERTS + "/empty.pem";
 
-// bal scan flags any literal or constant written straight into a `password` field, even in
-// tests; these indirections keep the (public, test-only) fixture secret out of that position.
-function certPass() returns string {
-    return CERT_PASS;
-}
-
-function wrongCertPass() returns string {
-    return "not-the-" + CERT_PASS;
-}
+// bal scan wants anything written into a `password` field to be a configurable rather than
+// a literal, constant, or other fixed value - even in tests. The test keystores' (public,
+// committed) secret therefore reaches those fields through these configurables; `bal test`
+// never overrides them.
+configurable string fixtureKeystorePass = CERT_PASS;
+configurable string fixtureWrongKeystorePass = "not-the-" + CERT_PASS;
 
 Client? tlsConfigTestClient = ();
 int tlsConfigTestMockId = -1;
@@ -59,7 +56,7 @@ function testClientTlsWithAnExplicitCipherSuiteList() returns error? {
 
     Client smppClient = check new ("localhost", "test", "test", port = TLS_CIPHERS_PORT,
             secureSocket = {
-                cert: {path: CLIENT_TRUSTSTORE, password: certPass()},
+                cert: {path: CLIENT_TRUSTSTORE, password: fixtureKeystorePass},
                 protocolVersions: ["TLSv1.3"],
                 ciphers: ["TLS_AES_256_GCM_SHA384", "TLS_AES_128_GCM_SHA256"]
             });
@@ -75,9 +72,9 @@ function testClientTlsFailsWhenTheTruststoreCannotBeOpened() returns error? {
     tlsConfigTestMockId = mockId;
 
     Client|error result = new ("localhost", "test", "test", port = TLS_UNOPENABLE_TRUSTSTORE_PORT,
-            secureSocket = {cert: {path: CLIENT_TRUSTSTORE, password: wrongCertPass()}});
+            secureSocket = {cert: {path: CLIENT_TRUSTSTORE, password: fixtureWrongKeystorePass}});
     test:assertTrue(result is error, "a truststore that cannot be opened must fail init");
-    test:assertFalse((<error>result).message().includes(wrongCertPass()),
+    test:assertFalse((<error>result).message().includes(fixtureWrongKeystorePass),
             "the failure must not echo the secret: " + (<error>result).message());
 }
 

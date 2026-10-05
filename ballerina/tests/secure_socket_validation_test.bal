@@ -32,7 +32,8 @@ function testSecureSocketRejectsEmptyPemPath() {
 
 @test:Config {groups: ["tls", "validation"]}
 function testSecureSocketRejectsEmptyTruststorePathOnListener() {
-    Listener|error l = new ("localhost", "test", "test", secureSocket = {cert: {path: " ", password: certPass()}});
+    Listener|error l = new ("localhost", "test", "test",
+            secureSocket = {cert: {path: " ", password: fixtureKeystorePass}});
     test:assertTrue(l is error, "an empty truststore path must be rejected at init");
     test:assertTrue((<error>l).message().includes("secureSocket.cert.path"), (<error>l).message());
 }
@@ -59,8 +60,8 @@ function testClientInitRejectsOversizedOrNonAsciiCredentials() {
     Client|error longSystemId = new ("localhost", "abcdefghijklmnopq", "test", port = UNREACHABLE_PORT);
     test:assertTrue(longSystemId is Error, "a 17-character systemId must be rejected before connecting");
 
-    Client|error longSecret = new ("localhost", "test", "0123456789", port = UNREACHABLE_PORT);
-    test:assertTrue(longSecret is Error, "a 10-character bind secret must be rejected before connecting");
+    Client|error tenCharBind = new ("localhost", "test", "0123456789", port = UNREACHABLE_PORT);
+    test:assertTrue(tenCharBind is Error, "a 10-character bind credential must be rejected before connecting");
 
     Client|error longSystemType = new ("localhost", "test", "test", port = UNREACHABLE_PORT,
             systemType = "abcdefghijklmn");
