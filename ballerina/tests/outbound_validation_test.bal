@@ -139,8 +139,13 @@ function testClientOutboundRejectionsNeverReachTheWire() returns error? {
     assertLocalRejection(r, "embedded NUL");
     r = smppClient->submit({destinationAddress: repeat("9", 21), shortMessage: "x"});
     assertLocalRejection(r, "characters");
-    // (An EMPTY destinationAddress is not rejected here: the Client forwards it as a
-    // spec-legal NULL address, unlike Caller.submit - see caller_validation_test.bal.)
+    // An EMPTY destinationAddress is a local input error on every submit-family call,
+    // exactly as on Caller.submit (see caller_validation_test.bal) - never forwarded as a
+    // NULL address for the SMSC to answer ESME_RINVDSTADR.
+    r = smppClient->submit({destinationAddress: "", shortMessage: "x"});
+    assertLocalRejection(r, "destinationAddress is required and must not be empty");
+    r = smppClient->submitData({destinationAddress: "", shortMessage: "x"});
+    assertLocalRejection(r, "destinationAddress is required and must not be empty");
     MultiSubmitResult|Error m = smppClient->submitMulti({destinationAddress: "", shortMessage: "x"}, [dest, ""]);
     assertLocalRejection(m, "destinationAddresses[1]");
 

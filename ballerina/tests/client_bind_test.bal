@@ -23,6 +23,8 @@ const int CLIENT_BIND_TEST_PORT = 28001;
 const int CLIENT_BIND_BAD_SYSID_PORT = 28002;
 const int CLIENT_BIND_BAD_PASSWORD_PORT = 28003;
 
+const int CLIENT_BIND_REFUSED_PORT = 28314;
+
 Client? clientBindTestClient = ();
 int clientBindTestMockId = -1;
 
@@ -79,6 +81,10 @@ function testClientBindFailsForInvalidSystemId() returns error? {
         test:assertTrue(result is Error, "the init error must be the distinct smpp:Error type");
         test:assertTrue(result.message().includes("Invalid System ID"),
                 string `expected an Invalid System ID rejection, got: ${result.message()}`);
+        // A negative bind_resp is classified like a rejected submit: REJECTED + the status.
+        test:assertEquals((<Error>result).detail().failureMode, REJECTED);
+        test:assertEquals((<Error>result).detail().commandStatus, 0x0F, "ESME_RINVSYSID");
+        test:assertEquals((<Error>result).detail().possiblySubmitted, false);
     }
 
     // The mock observed the same rejection from its own side - proves the validator
@@ -100,7 +106,21 @@ function testClientBindFailsForInvalidPassword() returns error? {
         test:assertTrue(result is Error, "the init error must be the distinct smpp:Error type");
         test:assertTrue(result.message().includes("Invalid Password"),
                 string `expected an Invalid Password rejection, got: ${result.message()}`);
+        test:assertEquals((<Error>result).detail().failureMode, REJECTED);
+        test:assertEquals((<Error>result).detail().commandStatus, 0x0E, "ESME_RINVPASWD");
     }
     int|error bindOutcome = mockSmscAwaitNextBind(mockId, 5000);
     test:assertTrue(bindOutcome is error, "the mock must report the rejected bind as an error");
+}
+
+@test:Config {groups: ["client", "bind"]}
+function testClientBindConnectionRefusedIsLinkDown() {
+    // Nothing listens on this port: a refused TCP connect is LINK_DOWN with no SMPP status.
+    Client|error result = new ("localhost", "sys", "pw", port = CLIENT_BIND_REFUSED_PORT, bindTimeout = 5);
+    test:assertTrue(result is Error, "a refused connect must fail Client.init with smpp:Error");
+    if result is Error {
+        test:assertEquals(result.detail().failureMode, LINK_DOWN, result.message());
+        test:assertEquals(result.detail().commandStatus, (), "no SMSC status for a transport failure");
+        test:assertEquals(result.detail().possiblySubmitted, false);
+    }
 }

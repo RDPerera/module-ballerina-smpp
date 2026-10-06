@@ -203,7 +203,7 @@ public final class SubmitErrorMapper {
      */
     public static MappedFailure mapBindFailure(Throwable t, String prefix) {
         String msg = prefix + ": " + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
-        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof NegativeResponseException e) {
                 return new MappedFailure(msg, "REJECTED", e.getCommandStatus(), false);
             }

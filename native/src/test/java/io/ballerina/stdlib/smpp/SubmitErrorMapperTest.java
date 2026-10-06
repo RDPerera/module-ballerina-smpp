@@ -188,4 +188,29 @@ class SubmitErrorMapperTest {
         assertEquals("invalid credentials: password exceeds the maximum length of 8 characters", f.message);
         assertFalse(f.possiblySubmitted);
     }
+
+    @Test
+    void genericNackToBindIsRejectedWithItsStatus() {
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(
+                new GenericNackResponseException("generic_nack", 0x03), "failed to connect/bind to SMSC");
+        assertEquals("REJECTED", f.failureMode);
+        assertEquals(0x03, f.commandStatus);
+        assertFalse(f.possiblySubmitted);
+    }
+
+    @Test
+    void malformedBindPduIsProtocolError() {
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(new PDUException("bad PDU"),
+                "failed to connect/bind to SMSC");
+        assertEquals("PROTOCOL_ERROR", f.failureMode);
+        assertNull(f.commandStatus);
+    }
+
+    @Test
+    void unexpectedBindFailureIsProtocolErrorNamingTheClass() {
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(new IllegalStateException(),
+                "failed to connect/bind to SMSC");
+        assertEquals("PROTOCOL_ERROR", f.failureMode);
+        assertTrue(f.message.contains("IllegalStateException"), f.message);
+    }
 }
