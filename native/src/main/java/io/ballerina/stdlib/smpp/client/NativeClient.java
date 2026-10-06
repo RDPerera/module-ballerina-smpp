@@ -220,6 +220,11 @@ public final class NativeClient {
             npiName = rec.getStringValue(StringUtils.fromString("numberingPlanIndicator")).getValue();
         }
         if (addr.isEmpty()) {
+            if (required) {
+                // Same stance as NativeCaller.required(): an empty destination is a local
+                // input error, not something to let the SMSC answer ESME_RINVDSTADR for.
+                throw new InvalidRequest(fieldName + " is required and must not be empty");
+            }
             return new AddrSpec("", TypeOfNumber.UNKNOWN, NumberingPlanIndicator.UNKNOWN);
         }
         return new AddrSpec(addr,
@@ -617,7 +622,7 @@ public final class NativeClient {
         try {
             validateCredentials(systemId, password, systemType);
         } catch (IllegalArgumentException e) {
-            return ModuleUtils.createError(e.getMessage());
+            return SubmitErrorMapper.toError(SubmitErrorMapper.mapBindFailure(e, "invalid credentials"));
         }
 
         // Captured once, as a plain immutable String, rather than storing the caller's
@@ -649,7 +654,8 @@ public final class NativeClient {
         try {
             session = newSession(tls, bindTimeoutMillis, onTransportDeath, attemptConn);
         } catch (Exception e) {
-            return ModuleUtils.createError("failed to open a connection to the SMSC: " + e.getMessage());
+            return SubmitErrorMapper.toError(
+                    SubmitErrorMapper.mapBindFailure(e, "failed to open a connection to the SMSC"));
         }
         session.setMessageReceiverListener(NOOP_RECEIVER_LISTENER);
         // Own drop signal, independent of the rebind loop this Client does not have: once
@@ -680,7 +686,11 @@ public final class NativeClient {
             session.connectAndBind(host, port, bindType, systemId, password, systemType,
                     TypeOfNumber.UNKNOWN, NumberingPlanIndicator.UNKNOWN, null, bindTimeoutMillis);
         } catch (Exception e) {
-            return ModuleUtils.createError("failed to connect/bind to SMSC: " + e.getMessage());
+            // Classified like the submit path (REJECTED + command_status for a negative
+            // bind_resp, LINK_DOWN for refused/unreachable/timed-out/TLS failures) so a
+            // caller can branch on failureMode instead of parsing the message.
+            return SubmitErrorMapper.toError(
+                    SubmitErrorMapper.mapBindFailure(e, "failed to connect/bind to SMSC"));
         }
 
         sessionRef.set(session);

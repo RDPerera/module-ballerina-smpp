@@ -256,6 +256,7 @@ public type ListenerConfig record {|
     decimal gracefulStopTimeout = 30;
     RebindPolicy rebindPolicy = {};
     decimal enquireLinkInterval = 60;
+    decimal enquireLinkTimeout = 10;
     decimal bindTimeout = 60;
     decimal transactionTimeout = 30;
     (SecureSocket|InsecureSocket)? secureSocket = ();
@@ -265,7 +266,7 @@ public isolated function init(string host, string systemId, string password,
         *ListenerConfig config) returns error?;
 ```
 
-As with `Client`, `host`, `systemId`, and `password` are required parameters of `init` itself, not `ListenerConfig` fields. `init` validates configuration only; the connect-and-bind happens at `'start()` (called automatically by the runtime for a `listener` declaration, or explicitly for a dynamically-registered one). `maxConcurrentDispatch` bounds how many inbound PDUs run through the attached service at once — excess is answered `ESME_RTHROTTLED` so the SMSC backs off and retains the message, per SMPP's at-least-once delivery model.
+As with `Client`, `host`, `systemId`, and `password` are required parameters of `init` itself, not `ListenerConfig` fields. `init` validates configuration only; the connect-and-bind happens at `'start()` (called automatically by the runtime for a `listener` declaration, or explicitly for a dynamically-registered one). `maxConcurrentDispatch` bounds how many inbound PDUs run through the attached service at once — excess is answered `ESME_RTHROTTLED` so the SMSC backs off and retains the message, per SMPP's at-least-once delivery model. `enquireLinkInterval` is the keepalive cadence and `enquireLinkTimeout` how long the connector waits for the `enquire_link_resp` before it treats the link as dead and rebinds; a failed `'start()` (unreachable host, negative `bind_resp`, TLS failure) returns an `Error` whose `failureMode`/`commandStatus` are populated exactly as for a failed submit.
 
 ### 5.3 Service declaration
 

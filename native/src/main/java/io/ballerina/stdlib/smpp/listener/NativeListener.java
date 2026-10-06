@@ -31,6 +31,7 @@ import io.ballerina.stdlib.smpp.ObservedConnection;
 import io.ballerina.stdlib.smpp.RawConnectionFactory;
 import io.ballerina.stdlib.smpp.SmppPlainConnectionFactory;
 import io.ballerina.stdlib.smpp.SmppSslConnectionFactory;
+import io.ballerina.stdlib.smpp.SubmitErrorMapper;
 import org.jsmpp.bean.BindType;
 import org.jsmpp.bean.NumberingPlanIndicator;
 import org.jsmpp.bean.TypeOfNumber;
@@ -315,7 +316,8 @@ public final class NativeListener {
                 }
                 // else: a concurrent stop moved us to STOPPING/STOPPED; leave its transition alone.
             }
-            return ModuleUtils.createError("failed to connect/bind to SMSC: " + e.getMessage());
+            return SubmitErrorMapper.toError(
+                    SubmitErrorMapper.mapBindFailure(e, "failed to connect/bind to SMSC"));
         }
     }
 
@@ -345,7 +347,8 @@ public final class NativeListener {
         // armed them, never on whatever a later rebind installed.
         AtomicReference<ObservedConnection> attemptConn = new AtomicReference<>();
         SMPPSession session = newSession(listener, bindTimeoutMillis, onTransportDeath,
-                attemptConn, (long) (decimalValue(config, "transactionTimeout") * 1000));
+                attemptConn, (long) (decimalValue(config, "transactionTimeout") * 1000),
+                (long) (decimalValue(config, "enquireLinkTimeout") * 1000));
         session.setMessageReceiverListener(dispatcher);
 
         String host = (String) listener.getNativeData(NATIVE_HOST);
@@ -982,7 +985,8 @@ public final class NativeListener {
     @SuppressWarnings("unchecked")
     private static SMPPSession newSession(BObject listener, int connectTimeoutMillis,
             AtomicReference<Runnable> onTransportDeath,
-            AtomicReference<ObservedConnection> attemptConn, long submitTransactionTimerMs)
+            AtomicReference<ObservedConnection> attemptConn, long submitTransactionTimerMs,
+            long enquireLinkTimeoutMs)
             throws Exception {
         Object tls = listener.getNativeData(NATIVE_TLS);
         RawConnectionFactory delegate = tls == null
@@ -1001,7 +1005,7 @@ public final class NativeListener {
                     new ObservedConnection(raw.connection(), raw.rawSocket(), onTransportDeath);
             attemptConn.set(observed);
             return observed;
-        }, submitTransactionTimerMs);
+        }, submitTransactionTimerMs, enquireLinkTimeoutMs);
     }
 
     /** Field names here mirror types.bal's internal ResolvedTls record exactly. */

@@ -18,8 +18,12 @@
 
 package io.ballerina.stdlib.smpp.listener;
 
+import org.jsmpp.InvalidResponseException;
+import org.jsmpp.extra.ResponseTimeoutException;
 import org.jsmpp.session.SMPPSession;
 import org.jsmpp.session.connection.ConnectionFactory;
+
+import java.io.IOException;
 
 /**
  * jsmpp keeps ONE {@code transactionTimer} per session, and it bounds two very different
@@ -46,8 +50,10 @@ import org.jsmpp.session.connection.ConnectionFactory;
  * </ul>
  *
  * <p>Net effect with defaults: submits wait up to 30s for their response; a dead-link
- * enquire probe burns 2s instead of 30s; silent-peer detection stays ≈
- * {@code enquireLinkInterval} + 2s. NOTE the timer split alone does NOT bound a stop:
+ * enquire probe waits {@code enquireLinkTimeout} (10s, see {@link #sendEnquireLink()})
+ * instead of 30s; silent-peer detection stays ≈ {@code enquireLinkInterval} +
+ * {@code enquireLinkTimeout}; unbind and reader-exit keep the 2s bound. NOTE the timer
+ * split alone does NOT bound a stop:
  * jsmpp's {@code unbindAndClose()} still has three untimed segments (monitor
  * acquisition behind a stalled writer, the socket write itself, and {@code close()}'s
  * {@code enquireLinkSender.join()}) — the wall-clock stop bound comes from
@@ -89,11 +95,23 @@ final class ConnectorSession extends SMPPSession {
         SUBMIT_CONTEXT.remove();
     }
 
-    private final long submitTransactionTimerMs;
+    /**
+     * Marks the current thread as inside jsmpp's {@code EnquireLinkSender} probe, so the
+     * {@code enquire_link_resp} wait gets the configured {@code enquireLinkTimeout} instead of
+     * the 2s housekeeping bound. Set by the {@link #sendEnquireLink()} override, which is
+     * exactly what jsmpp's sender thread calls (bytecode-verified for 3.0.2, same audit
+     * as the submit split above).
+     */
+    private static final ThreadLocal<Boolean> ENQUIRE_LINK_CONTEXT = new ThreadLocal<>();
 
-    ConnectorSession(ConnectionFactory connectionFactory, long submitTransactionTimerMs) {
+    private final long submitTransactionTimerMs;
+    private final long enquireLinkTimeoutMs;
+
+    ConnectorSession(ConnectionFactory connectionFactory, long submitTransactionTimerMs,
+            long enquireLinkTimeoutMs) {
         super(connectionFactory);
         this.submitTransactionTimerMs = submitTransactionTimerMs;
+        this.enquireLinkTimeoutMs = enquireLinkTimeoutMs;
         // The FIELD carries the short bound: unbind() reads it directly, and
         // super.getTransactionTimer() returns it everywhere outside a submit context.
         // Nothing may call setTransactionTimer() with the submit value after this.
@@ -102,8 +120,29 @@ final class ConnectorSession extends SMPPSession {
 
     @Override
     public long getTransactionTimer() {
-        return Boolean.TRUE.equals(SUBMIT_CONTEXT.get())
-                ? submitTransactionTimerMs
-                : super.getTransactionTimer();
+        if (Boolean.TRUE.equals(SUBMIT_CONTEXT.get())) {
+            return submitTransactionTimerMs;
+        }
+        if (Boolean.TRUE.equals(ENQUIRE_LINK_CONTEXT.get())) {
+            return enquireLinkTimeoutMs;
+        }
+        return super.getTransactionTimer();
+    }
+
+    /**
+     * The keepalive probe. A real SMSC under load, or one reached over a WAN, routinely
+     * takes more than 2s to answer an {@code enquire_link}; at the plain housekeeping bound
+     * the connector would declare the link dead, close a healthy session and rebind, losing
+     * whatever was in flight. The wait here is {@code ListenerConfig.enquireLinkTimeout}
+     * (default 10s); the unbind/reader-exit paths keep the short bound.
+     */
+    @Override
+    protected void sendEnquireLink() throws ResponseTimeoutException, InvalidResponseException, IOException {
+        ENQUIRE_LINK_CONTEXT.set(Boolean.TRUE);
+        try {
+            super.sendEnquireLink();
+        } finally {
+            ENQUIRE_LINK_CONTEXT.remove();
+        }
     }
 }

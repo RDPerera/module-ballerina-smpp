@@ -76,6 +76,14 @@ public type ListenerConfig record {|
     # This ceiling is **per listener, not per process**: N listeners at 1024 in `SYNC` mode
     # is a legal configuration that would attempt ~N×1024 platform threads. Must be 1-1024
     # (validated at `Listener` init).
+    #
+    # Sizing: a permit is held from the moment a PDU is admitted until the handler
+    # returns, and that includes the time the Ballerina scheduler takes to start the
+    # handler strand - measured at up to ~1s on 2201.12.x and ~0.1-0.4s on 2201.13.x even
+    # for a trivial handler. Budget roughly `peak inbound PDUs per second × 1s` (plus
+    # whatever the handler itself takes in `SYNC` mode); at 60-70 receipts/s, 16 permits
+    # still throttled a few percent of PDUs in testing while 64 throttled none. An SMSC
+    # that honours `ESME_RTHROTTLED` redelivers; one that does not drops the PDU.
     int maxConcurrentDispatch = 3;
     # Controls when the `deliver_sm_resp`/`data_sm_resp` is sent back to the SMSC
     # relative to the attached service's processing of the PDU. Defaults to `SYNC`.
@@ -118,6 +126,16 @@ public type ListenerConfig record {|
     # (validated at `Listener` init); `0`/disabled is not allowed, since it would also
     # disable dead-link detection.
     decimal enquireLinkInterval = 60;
+    # How long the connector waits for the SMSC's `enquire_link_resp` to a keepalive probe,
+    # in seconds, before it treats the link as dead (closes the session and drives
+    # `rebindPolicy`). Silent-peer detection therefore takes ≈ `enquireLinkInterval` +
+    # `enquireLinkTimeout`. The default of 10s is deliberately well above the ~2s the
+    # underlying library historically used: an SMSC under load, or one reached over a WAN,
+    # routinely answers keepalives in a few seconds, and tearing down a healthy session
+    # on every slow answer loses whatever was in flight and churns binds. Lower it for
+    # faster dead-link detection on a LAN; raise it for a slow SMSC. This field is in
+    # SECONDS. Must be 1-300 (validated at `Listener` init).
+    decimal enquireLinkTimeout = 10;
     # Maximum time the connect-and-bind handshake may take, in seconds — applied to the
     # initial ``'start()`` and to every automatic rebind attempt. It bounds the TCP connect
     # and the bind-response wait *separately*, so a fully stalled attempt (a black-holed
@@ -129,13 +147,14 @@ public type ListenerConfig record {|
     # How long a `Caller.submit` waits for the SMSC's `submit_sm_resp`, in seconds.
     #
     # This bounds ONLY the requests this connector issues on your behalf. The session's
-    # internal housekeeping — the `unbind_resp` wait during `gracefulStop`/`immediateStop`,
-    # the `enquire_link_resp` wait that detects a silently dead link, and the reader
-    # thread's exit drain — is bounded separately at a short internal timer (~2s, jsmpp's
-    # own historical default for exactly those paths), so raising this value does NOT slow
-    # stops or dead-link detection. Worst-case `gracefulStop` ≈ `gracefulStopTimeout` +
-    # ~2s (sweep) + ~4s (bounded close); `immediateStop` ≈ ~4s; silent-peer detection
-    # stays ≈ `enquireLinkInterval` + 2s, regardless of this setting. The one exception: a
+    # internal housekeeping — the `unbind_resp` wait during `gracefulStop`/`immediateStop`
+    # and the reader thread's exit drain — is bounded separately at a short internal timer
+    # (~2s, jsmpp's own historical default for exactly those paths), and the
+    # `enquire_link_resp` wait has its own knob (`enquireLinkTimeout`), so raising this
+    # value does NOT slow stops or dead-link detection. Worst-case `gracefulStop` ≈
+    # `gracefulStopTimeout` + ~2s (sweep) + ~4s (bounded close); `immediateStop` ≈ ~4s;
+    # silent-peer detection stays ≈ `enquireLinkInterval` + `enquireLinkTimeout`,
+    # regardless of this setting. The one exception: a
     # submit already awaiting its response when a stop closes the session completes only
     # at THIS timeout (with `LINK_DOWN`, `possiblySubmitted: true`) — the single place
     # this value can stretch past a stop.
@@ -304,6 +323,13 @@ isolated function validateConfig(ListenerConfig config) returns error? {
         // Upper bound doubles as a unit-confusion guard: this field is SECONDS, while
         // jsmpp's knob is milliseconds - someone typing 60000 would otherwise get ~16h.
         return error Error(string `enquireLinkInterval must not exceed 3600 seconds - note this field is in SECONDS, not milliseconds, got ${config.enquireLinkInterval}`);
+    }
+    if config.enquireLinkTimeout < 1d {
+        // Sub-second would fail the link on any SMSC that is merely busy.
+        return error Error(string `enquireLinkTimeout must be at least 1 second, got ${config.enquireLinkTimeout}`);
+    }
+    if config.enquireLinkTimeout > 300d {
+        return error Error(string `enquireLinkTimeout must not exceed 300 seconds - note this field is in SECONDS, not milliseconds, got ${config.enquireLinkTimeout}`);
     }
     if config.bindTimeout < 1d {
         // A sub-second bind timeout would time out nearly every real TLS+bind handshake.

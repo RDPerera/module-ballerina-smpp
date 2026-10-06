@@ -30,6 +30,8 @@ function testListenerConfigValidationRejectsOutOfBoundsValues() {
         {config: {gracefulStopTimeout: -1}, expect: "gracefulStopTimeout"},
         {config: {enquireLinkInterval: 2}, expect: "enquireLinkInterval"},
         {config: {enquireLinkInterval: 60000}, expect: "enquireLinkInterval"},
+        {config: {enquireLinkTimeout: 0.5}, expect: "enquireLinkTimeout"},
+        {config: {enquireLinkTimeout: 10000}, expect: "enquireLinkTimeout"},
         {config: {bindTimeout: 0.5}, expect: "bindTimeout"},
         {config: {bindTimeout: 60000}, expect: "bindTimeout"},
         {config: {transactionTimeout: 0.5}, expect: "transactionTimeout"},
@@ -44,6 +46,7 @@ function testListenerConfigValidationRejectsOutOfBoundsValues() {
                 maxConcurrentDispatch = config.maxConcurrentDispatch,
                 gracefulStopTimeout = config.gracefulStopTimeout,
                 enquireLinkInterval = config.enquireLinkInterval, bindTimeout = config.bindTimeout,
+                enquireLinkTimeout = config.enquireLinkTimeout,
                 transactionTimeout = config.transactionTimeout, rebindPolicy = config.rebindPolicy);
         test:assertTrue(result is error, string `config with out-of-bounds ${expect} must fail init`);
         if result is error {

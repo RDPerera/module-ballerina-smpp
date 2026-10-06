@@ -132,4 +132,60 @@ class SubmitErrorMapperTest {
         MappedFailure f = SubmitErrorMapper.mapSubmitFailure(new IllegalStateException());
         assertTrue(f.message.contains("IllegalStateException"), f.message);
     }
+
+    // --- mapBindFailure: connect/bind failures from Client.init / Listener.start ---
+
+    @Test
+    void bindRefusedBySmscIsRejectedWithTheBindStatusEvenWhenJsmppWrapsIt() {
+        // jsmpp's connectAndBind rethrows a negative bind_resp as IOException(cause = NegativeResponseException)
+        IOException wrapped = new IOException("Receive negative bind response: Negative response 0000000e",
+                new NegativeResponseException(0x0E));
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(wrapped, "failed to connect/bind to SMSC");
+        assertEquals("REJECTED", f.failureMode);
+        assertEquals(0x0E, f.commandStatus);
+        assertFalse(f.possiblySubmitted);
+        assertTrue(f.message.startsWith("failed to connect/bind to SMSC: Receive negative bind response"), f.message);
+    }
+
+    @Test
+    void bindResponseTimeoutIsLinkDown() {
+        IOException wrapped = new IOException("Time out waiting for bind response",
+                new ResponseTimeoutException("No response after waiting for 60000 millis"));
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(wrapped, "failed to connect/bind to SMSC");
+        assertEquals("LINK_DOWN", f.failureMode);
+        assertNull(f.commandStatus);
+        assertFalse(f.possiblySubmitted);
+    }
+
+    @Test
+    void connectionRefusedUnknownHostAndTlsFailuresAreLinkDown() {
+        for (IOException e : new IOException[] {
+                new java.net.ConnectException("Connection refused"),
+                new java.net.UnknownHostException("no-such-host.invalid"),
+                new java.net.SocketTimeoutException("Connect timed out"),
+                new javax.net.ssl.SSLHandshakeException("PKIX path building failed")}) {
+            MappedFailure f = SubmitErrorMapper.mapBindFailure(e, "failed to connect/bind to SMSC");
+            assertEquals("LINK_DOWN", f.failureMode, e.getClass().getSimpleName());
+            assertNull(f.commandStatus);
+            assertFalse(f.possiblySubmitted);
+        }
+    }
+
+    @Test
+    void invalidBindResponseIsProtocolError() {
+        IOException wrapped = new IOException("Receive invalid response of bind",
+                new InvalidResponseException("unexpected command id"));
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(wrapped, "failed to connect/bind to SMSC");
+        assertEquals("PROTOCOL_ERROR", f.failureMode);
+    }
+
+    @Test
+    void oversizedCredentialsAreInvalidRequest() {
+        MappedFailure f = SubmitErrorMapper.mapBindFailure(
+                new IllegalArgumentException("password exceeds the maximum length of 8 characters"),
+                "invalid credentials");
+        assertEquals("INVALID_REQUEST", f.failureMode);
+        assertEquals("invalid credentials: password exceeds the maximum length of 8 characters", f.message);
+        assertFalse(f.possiblySubmitted);
+    }
 }

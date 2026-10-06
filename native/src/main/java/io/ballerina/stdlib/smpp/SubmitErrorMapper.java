@@ -188,6 +188,48 @@ public final class SubmitErrorMapper {
      * @param f the mapped failure
      * @return a populated {@code smpp:Error}
      */
+    /**
+     * Maps a failed connect-and-bind (a {@code Client} init or a {@code Listener} start) onto
+     * a {@code FailureMode}, so callers can tell "wrong credentials" from "SMSC unreachable"
+     * without parsing the message. jsmpp's {@code connectAndBind} wraps the interesting
+     * exceptions ({@code NegativeResponseException} for a negative {@code bind_resp},
+     * {@code ResponseTimeoutException} for an unanswered bind, {@code InvalidResponseException})
+     * in an {@code IOException}, so the cause chain is walked rather than the top-level type
+     * matched. {@code possiblySubmitted} is always false: nothing was submitted.
+     *
+     * @param t the throwable from the connect/bind path
+     * @param prefix the message prefix the call site already used ("failed to connect/bind to SMSC")
+     * @return the failure mode, command status (negative bind_resp only) and message
+     */
+    public static MappedFailure mapBindFailure(Throwable t, String prefix) {
+        String msg = prefix + ": " + (t.getMessage() != null ? t.getMessage() : t.getClass().getSimpleName());
+        for (Throwable c = t; c != null; c = c.getCause() == c ? null : c.getCause()) {
+            if (c instanceof NegativeResponseException e) {
+                return new MappedFailure(msg, "REJECTED", e.getCommandStatus(), false);
+            }
+            if (c instanceof GenericNackResponseException e) {
+                return new MappedFailure(msg, "REJECTED", e.getCommandStatus(), false);
+            }
+            if (c instanceof ResponseTimeoutException) {
+                // The SMSC accepted the TCP connection but never answered the bind: from the
+                // caller's point of view the link is not usable, same as an unreachable host.
+                return new MappedFailure(msg, "LINK_DOWN", null, false);
+            }
+            if (c instanceof InvalidResponseException || c instanceof PDUException) {
+                return new MappedFailure(msg, "PROTOCOL_ERROR", null, false);
+            }
+        }
+        if (t instanceof IllegalArgumentException) {
+            // Local pre-send validation (credential length/charset): nothing reached the wire.
+            return new MappedFailure(msg, "INVALID_REQUEST", null, false);
+        }
+        if (t instanceof IOException) {
+            // Connection refused, unknown host, connect timeout, TLS handshake failure.
+            return new MappedFailure(msg, "LINK_DOWN", null, false);
+        }
+        return new MappedFailure(msg, "PROTOCOL_ERROR", null, false);
+    }
+
     public static BError toError(MappedFailure f) {
         Map<String, Object> detail = new HashMap<>();
         detail.put("failureMode", f.failureMode);

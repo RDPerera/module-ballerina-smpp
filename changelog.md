@@ -3,6 +3,17 @@ This file contains all the notable changes done to the Ballerina SMPP package th
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `ListenerConfig.enquireLinkTimeout` (default 10s): how long the listener waits for an `enquire_link_resp` before treating the link as dead. Previously a fixed ~2s internal bound, which tore down healthy sessions against SMSCs that answer keepalives slowly.
+
+### Fixed
+
+- `Client.init` and `Listener.start` failures now carry `failureMode` and, for a negative `bind_resp`, `commandStatus` in the error detail (`REJECTED` for bad credentials, `LINK_DOWN` for unreachable/refused/timed-out/TLS failures, `INVALID_REQUEST` for oversized credentials), matching the submit path. Previously the detail record was empty.
+- `Client.submit`/`submitMulti`/`submitData` reject an empty `destinationAddress` locally with `INVALID_REQUEST`, as `Caller.submit` already did, instead of forwarding it to the SMSC.
+
 ## [1.0.0] - Unreleased
 
 ### Added
