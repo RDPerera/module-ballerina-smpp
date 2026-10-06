@@ -3,4 +3,4 @@ id = "smpp-compiler-plugin"
 class = "io.ballerina.stdlib.smpp.plugin.SmppCompilerPlugin"
 
 [[dependency]]
-path = "../compiler-plugin/build/libs/smpp-compiler-plugin-1.0.0.jar"
+path = "../compiler-plugin/build/libs/smpp-compiler-plugin-1.0.1-SNAPSHOT.jar"

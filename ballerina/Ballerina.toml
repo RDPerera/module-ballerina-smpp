@@ -1,7 +1,7 @@
 [package]
 org = "ballerina"
 name = "smpp"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Ballerina"]
 keywords = ["smpp", "sms", "messaging", "Type/Connector", "Type/Trigger", "Area/Built-in", "Area/Messaging", "Name/SMPP"]
 repository = "https://github.com/ballerina-platform/module-ballerina-smpp"
@@ -26,15 +26,15 @@ graalvmCompatible = false
 [[platform.java21.dependency]]
 groupId = "io.ballerina.stdlib"
 artifactId = "smpp-native"
-version = "1.0.0"
-path = "../native/build/libs/smpp-native-1.0.0.jar"
+version = "1.0.1-SNAPSHOT"
+path = "../native/build/libs/smpp-native-1.0.1-SNAPSHOT.jar"
 
 # Test-only bridge to the mock SMSC (native/src/testBridge) used by ballerina/tests/.
 [[platform.java21.dependency]]
 groupId = "io.ballerina.stdlib"
 artifactId = "smpp-native-test-bridge"
-version = "1.0.0"
-path = "../native/build/libs/smpp-native-test-bridge-1.0.0.jar"
+version = "1.0.1-SNAPSHOT"
+path = "../native/build/libs/smpp-native-test-bridge-1.0.1-SNAPSHOT.jar"
 scope = "testOnly"
 
 # jsmpp, copied into ./lib by copyToLib. Its slf4j-api dependency is NOT bundled — the
